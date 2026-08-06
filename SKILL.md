@@ -1,11 +1,11 @@
 ---
 name: project-code-memory
-description: Automatically initialize and maintain a compact, repository-local projectCodeMemory index of verified code structure and logic, keep every generated memory artifact inside that folder, and reuse only entries whose source fingerprints are still current. Use at the start and end of every repository code analysis, debugging, implementation, fix, refactor, or test task, including read-only analysis, to avoid repeated codebase discovery without trusting stale conclusions.
+description: Automatically initialize and maintain a compact, repository-local projectCodeMemory index of verified code structure and logic, reuse complete valid hits without rereading source, and inspect only missing or stale details. Use at the start and end of every repository code analysis, debugging, implementation, fix, refactor, or test task, including read-only analysis, to reduce codebase discovery time and token use without trusting stale conclusions.
 ---
 
 # Project Code Memory
 
-Use `projectCodeMemory/` as an ignored, machine-oriented cache. Put every file created solely for code memory inside this folder. Treat current source and tests as authoritative; memory only accelerates navigation and recall.
+Use `projectCodeMemory/` as an ignored, machine-oriented cache. Put every file created solely for code memory inside this folder. Current source remains authoritative, but a `VALID` record is a fingerprint-verified proxy for its supporting files; never reopen those files merely to reconfirm remembered facts.
 
 ## Start every code task
 
@@ -17,9 +17,12 @@ Use `projectCodeMemory/` as an ignored, machine-oriented cache. Put every file c
 
    `query` automatically and idempotently creates `projectCodeMemory/index.tsv`, `records/`, and `drafts/` when absent and ensures the root `.gitignore` contains `/projectCodeMemory/`.
 
-2. Use only `VALID` records. Never use facts from `STALE` or malformed records; inspect current source instead and replace the record after verification.
-3. Query again with discovered class, symbol, table, endpoint, or path names when the initial natural-language query has no useful match.
-4. Read the current files being analyzed or changed. A valid memory can replace repeated architectural discovery, not inspection of the task's relevant code.
+2. Choose exactly one path from the query result:
+   - **Complete hit**: `VALID` records contain every fact needed for a read-only answer. Stop discovery and answer from memory. Do not run `rg`, `find`, source reads, searches, save, reindex, or audit.
+   - **Partial hit**: `VALID` records answer only part of the task. Keep their facts and inspect only the explicitly missing symbols or details. Do not broadly rediscover remembered flows.
+   - **Miss or invalid**: `STALE`, `ERROR`, `NO_MATCH`, or `EMPTY_INDEX`. Inspect current source for the uncovered scope and replace stale relevant records after verification.
+3. For a code change with a complete architectural hit, trust remembered structure and invariants. Read only the exact edit sites and tests needed to make the change; do not reconstruct the surrounding architecture.
+4. Query again only when a newly discovered symbol or path may match another record needed for an actual gap.
 
 `<skill-dir>` means the absolute directory containing this `SKILL.md`; resolve it from the loaded skill location.
 
@@ -35,7 +38,7 @@ The initializer preserves unrelated `.gitignore` content and user changes.
 
 ## Record verified knowledge
 
-Record only reusable logic actually established while reading, changing, or testing code. Prefer entry points, call/data flows, ownership boundaries, invariants, persistence effects, configuration gates, and high-value test commands. Do not store code dumps, guesses, secrets, generated output, or facts copied without checking them.
+Record only new or changed reusable logic actually established after a partial hit, miss, stale record, or code change. Prefer entry points, call/data flows, ownership boundaries, invariants, persistence effects, configuration gates, and high-value test commands. Never rewrite an unchanged complete-hit record. Do not store code dumps, guesses, secrets, generated output, or facts copied without checking them.
 
 Create the JSON draft at `projectCodeMemory/drafts/<id>.json` with this shape, then save it:
 
@@ -62,11 +65,11 @@ The tool rejects drafts outside `projectCodeMemory/drafts/`, recomputes SHA-256 
 
 ## Finish every code task
 
-1. After substantive analysis, save at least one coherent record for the reusable logic learned. For analysis-only tasks, exact current-source inspection is valid verification; do not claim that tests ran.
-2. For code changes, save newly learned or changed logic only after its supporting structure is confirmed and relevant checks pass. If checks could not run, record the exact source-based verification and limitation.
-3. For stale records related to the task, re-read current code and overwrite them with `save`. If the logic no longer exists, remove that record and run `reindex`.
-4. Run `python3 <skill-dir>/scripts/pcm.py audit --root <repo-root>` after saving records.
-5. Leave unrelated stale records untrusted. They may be repaired when their area is next analyzed.
+1. If the task was answered entirely by complete `VALID` hits and no code changed, stop with no memory writes or audit.
+2. If source inspection produced reusable new facts, save only those facts. For analysis-only tasks, exact current-source inspection is valid verification; do not claim that tests ran.
+3. For code changes, update records whose supporting files changed after relevant checks pass. If checks could not run, record the exact source-based verification and limitation.
+4. For stale records related to the task, re-read only their scope and overwrite them with `save`. If the logic no longer exists, remove that record and run `reindex`.
+5. Run `audit` only after code or memory writes that may affect records. Leave unrelated stale records untrusted for later repair.
 
 ## Integrity rules
 

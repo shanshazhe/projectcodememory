@@ -277,6 +277,20 @@ def read_index(index: Path) -> list[dict[str, str]]:
     return rows
 
 
+def query_payload(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": record["id"],
+        "p": record["p"],
+        "s": record["s"],
+        "sum": record["sum"],
+        "f": record["f"],
+        "flow": record["flow"],
+        "inv": record["inv"],
+        "fx": record["fx"],
+        "verify": record["verify"],
+    }
+
+
 def query_memory(root: Path, query: str, limit: int) -> int:
     init_memory(root, announce=False)
     _, index, records = memory_paths(root)
@@ -312,7 +326,7 @@ def query_memory(root: Path, query: str, limit: int) -> int:
             valid, changed = freshness(root, record)
             if valid:
                 print(f"VALID {row['id']} score={score}")
-                print(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+                print(json.dumps(query_payload(record), ensure_ascii=False, separators=(",", ":")))
             else:
                 print(f"STALE {row['id']} {' '.join(changed)}")
         except MemoryError as exc:
@@ -356,7 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
     save.add_argument("draft")
     query = subparsers.add_parser("query")
     query.add_argument("--root", default=".")
-    query.add_argument("--limit", type=int, default=5)
+    query.add_argument("--limit", type=int, default=3)
     query.add_argument("query")
     return parser
 
