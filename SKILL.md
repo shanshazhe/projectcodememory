@@ -1,6 +1,6 @@
 ---
 name: project-code-memory
-description: Automatically initialize and maintain a compact, repository-local projectCodeMemory index of verified code structure and logic, reuse complete valid hits without rereading source, and inspect only missing or stale details. Use at the start and end of every repository code analysis, debugging, implementation, fix, refactor, or test task, including read-only analysis, to reduce codebase discovery time and token use without trusting stale conclusions.
+description: Automatically initialize and maintain a compact projectCodeMemory index of verified code structure and logic in the single primary project chosen at task start, reuse complete valid hits without rereading source, and inspect only missing or stale details. Use at the start and end of every repository code analysis, debugging, implementation, fix, refactor, or test task, including cross-folder and read-only analysis, to reduce codebase discovery time and token use without trusting stale conclusions.
 ---
 
 # Project Code Memory
@@ -9,13 +9,13 @@ Use `projectCodeMemory/` as an ignored, machine-oriented cache. Put every file c
 
 ## Start every code task
 
-1. Resolve the repository root. Before any broad source scan, make this the first repository command, even for read-only analysis:
+1. Pin `PRIMARY_PROJECT_ROOT` once. Use the nearest repository root containing the task's initial working directory, or that initial directory when it is not in a repository. Do not recompute it after changing directories or following code into another folder. Before any broad source scan, make this the first repository command, even for read-only analysis:
 
    ```bash
-   python3 <skill-dir>/scripts/pcm.py query --root <repo-root> "<task terms, paths, or symbols>"
+   python3 <skill-dir>/scripts/pcm.py query --root <primary-project-root> "<task terms, paths, or symbols>"
    ```
 
-   `query` automatically and idempotently creates `projectCodeMemory/index.tsv`, `records/`, and `drafts/` when absent and ensures the root `.gitignore` contains `/projectCodeMemory/`.
+   `query` automatically and idempotently creates `projectCodeMemory/index.tsv`, `records/`, and `drafts/` in the primary project when absent and ensures only its root `.gitignore` contains `/projectCodeMemory/`.
 
 2. Choose exactly one path from the query result:
    - **Complete hit**: `VALID` records contain every fact needed for a read-only answer. Stop discovery and answer from memory. Do not run `rg`, `find`, source reads, searches, save, reindex, or audit.
@@ -36,11 +36,18 @@ The root-relative ignore rule is:
 
 The initializer preserves unrelated `.gitignore` content and user changes.
 
+## Cross-folder analysis
+
+- Treat every folder or repository outside `PRIMARY_PROJECT_ROOT` as a secondary, read-only reference for memory purposes.
+- Never pass a secondary folder to `--root`, run memory commands for it, create `projectCodeMemory/` inside it, or modify its `.gitignore`.
+- Do not store external-only code logic in the primary project's memory. If external code explains an integration, record only the primary project's behavior and only with supporting source paths inside `PRIMARY_PROJECT_ROOT`.
+- Keep the primary root fixed for the whole task. Change it only when the user explicitly switches the target project.
+
 ## Record verified knowledge
 
 Record only new or changed reusable logic actually established after a partial hit, miss, stale record, or code change. Prefer entry points, call/data flows, ownership boundaries, invariants, persistence effects, configuration gates, and high-value test commands. Never rewrite an unchanged complete-hit record. Do not store code dumps, guesses, secrets, generated output, or facts copied without checking them.
 
-Create the JSON draft at `projectCodeMemory/drafts/<id>.json` with this shape, then save it:
+Create the JSON draft at `<primary-project-root>/projectCodeMemory/drafts/<id>.json` with this shape, then save it:
 
 ```json
 {
@@ -58,7 +65,7 @@ Create the JSON draft at `projectCodeMemory/drafts/<id>.json` with this shape, t
 ```
 
 ```bash
-python3 <skill-dir>/scripts/pcm.py save --root <repo-root> <repo-root>/projectCodeMemory/drafts/<id>.json
+python3 <skill-dir>/scripts/pcm.py save --root <primary-project-root> <primary-project-root>/projectCodeMemory/drafts/<id>.json
 ```
 
 The tool rejects drafts outside `projectCodeMemory/drafts/`, recomputes SHA-256 fingerprints for every supporting path, writes compact JSON under `projectCodeMemory/records/`, rebuilds `index.tsv`, and deletes the consumed draft. Keep each record scoped to one coherent topic. Include every source file needed to support cross-file conclusions.
@@ -69,7 +76,7 @@ The tool rejects drafts outside `projectCodeMemory/drafts/`, recomputes SHA-256 
 2. If source inspection produced reusable new facts, save only those facts. For analysis-only tasks, exact current-source inspection is valid verification; do not claim that tests ran.
 3. For code changes, update records whose supporting files changed after relevant checks pass. If checks could not run, record the exact source-based verification and limitation.
 4. For stale records related to the task, re-read only their scope and overwrite them with `save`. If the logic no longer exists, remove that record and run `reindex`.
-5. Run `audit` only after code or memory writes that may affect records. Leave unrelated stale records untrusted for later repair.
+5. Run `audit --root <primary-project-root>` only after code or memory writes that may affect records. Leave unrelated stale records untrusted for later repair.
 
 ## Integrity rules
 
@@ -77,5 +84,6 @@ The tool rejects drafts outside `projectCodeMemory/drafts/`, recomputes SHA-256 
 - Never edit stored fingerprints by hand; `save` owns them.
 - Never claim verification stronger than what was performed.
 - Keep index summaries and records terse: navigation and invariants, not prose documentation.
+- One task has exactly one memory root: `<primary-project-root>/projectCodeMemory/`.
 - Keep indexes, records, drafts, scratch notes, manifests, state, locks, and temporary output created for this memory workflow under `projectCodeMemory/`. Never place them in the repository root, source tree, `/tmp`, user home, or the skill directory.
 - Never commit `projectCodeMemory/`.
