@@ -1,6 +1,6 @@
 ---
 name: project-code-memory
-description: Maintain a compact, repository-local projectCodeMemory index of verified code structure and logic, keep every generated memory artifact inside that folder, and reuse only entries whose source fingerprints are still current. Use at the start and end of every repository code analysis, debugging, implementation, fix, refactor, or test task to avoid repeated codebase discovery without trusting stale conclusions.
+description: Automatically initialize and maintain a compact, repository-local projectCodeMemory index of verified code structure and logic, keep every generated memory artifact inside that folder, and reuse only entries whose source fingerprints are still current. Use at the start and end of every repository code analysis, debugging, implementation, fix, refactor, or test task, including read-only analysis, to avoid repeated codebase discovery without trusting stale conclusions.
 ---
 
 # Project Code Memory
@@ -9,33 +9,29 @@ Use `projectCodeMemory/` as an ignored, machine-oriented cache. Put every file c
 
 ## Start every code task
 
-1. Resolve the repository root. If `projectCodeMemory/index.tsv` exists, query it **before broad source scans**:
+1. Resolve the repository root. Before any broad source scan, make this the first repository command, even for read-only analysis:
 
    ```bash
    python3 <skill-dir>/scripts/pcm.py query --root <repo-root> "<task terms, paths, or symbols>"
    ```
 
+   `query` automatically and idempotently creates `projectCodeMemory/index.tsv`, `records/`, and `drafts/` when absent and ensures the root `.gitignore` contains `/projectCodeMemory/`.
+
 2. Use only `VALID` records. Never use facts from `STALE` or malformed records; inspect current source instead and replace the record after verification.
 3. Query again with discovered class, symbol, table, endpoint, or path names when the initial natural-language query has no useful match.
-4. Read the current files being changed. A valid memory can replace repeated architectural discovery, not inspection of the edit site.
+4. Read the current files being analyzed or changed. A valid memory can replace repeated architectural discovery, not inspection of the task's relevant code.
 
-For a read-only analysis request, do not create or update memory unless the user also authorized repository changes.
+`<skill-dir>` means the absolute directory containing this `SKILL.md`; resolve it from the loaded skill location.
 
-## Initialize for an authorized code change
+Invoking this skill authorizes cache writes only to `projectCodeMemory/` plus the required `.gitignore` rule, including during read-only analysis. Do not change source, tests, build files, or other project configuration unless the user requested code changes.
 
-If memory does not exist, run:
-
-```bash
-python3 <skill-dir>/scripts/pcm.py init --root <repo-root>
-```
-
-Ensure the repository root `.gitignore` contains exactly this root-relative rule:
+The root-relative ignore rule is:
 
 ```gitignore
 /projectCodeMemory/
 ```
 
-Preserve unrelated `.gitignore` content and user changes.
+The initializer preserves unrelated `.gitignore` content and user changes.
 
 ## Record verified knowledge
 
@@ -64,12 +60,13 @@ python3 <skill-dir>/scripts/pcm.py save --root <repo-root> <repo-root>/projectCo
 
 The tool rejects drafts outside `projectCodeMemory/drafts/`, recomputes SHA-256 fingerprints for every supporting path, writes compact JSON under `projectCodeMemory/records/`, rebuilds `index.tsv`, and deletes the consumed draft. Keep each record scoped to one coherent topic. Include every source file needed to support cross-file conclusions.
 
-## Finish every code change
+## Finish every code task
 
-1. Run `python3 <skill-dir>/scripts/pcm.py audit --root <repo-root>` after edits and tests.
-2. For stale records related to the changed logic, re-read current code and overwrite them with `save`. If the logic no longer exists, remove that record and run `reindex`.
-3. Save newly learned logic only after its supporting code structure is confirmed and relevant checks pass. If checks could not run, state the exact source-based verification and any limitation; never promote uncertainty to fact.
-4. Leave unrelated stale records untrusted. They may be repaired when their area is next analyzed.
+1. After substantive analysis, save at least one coherent record for the reusable logic learned. For analysis-only tasks, exact current-source inspection is valid verification; do not claim that tests ran.
+2. For code changes, save newly learned or changed logic only after its supporting structure is confirmed and relevant checks pass. If checks could not run, record the exact source-based verification and limitation.
+3. For stale records related to the task, re-read current code and overwrite them with `save`. If the logic no longer exists, remove that record and run `reindex`.
+4. Run `python3 <skill-dir>/scripts/pcm.py audit --root <repo-root>` after saving records.
+5. Leave unrelated stale records untrusted. They may be repaired when their area is next analyzed.
 
 ## Integrity rules
 

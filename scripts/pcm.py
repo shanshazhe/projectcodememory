@@ -13,6 +13,7 @@ from typing import Any, Iterable
 
 
 MEMORY_DIR = "projectCodeMemory"
+IGNORE_RULE = f"/{MEMORY_DIR}/"
 INDEX_HEADER = "#pcm-v1\n#id\tkeywords\tpaths\tsymbols\tsummary\n"
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 TOKEN_PATTERN = re.compile(r"[\w./:#-]+", re.UNICODE)
@@ -41,13 +42,32 @@ def memory_paths(root: Path) -> tuple[Path, Path, Path]:
     return memory, memory / "index.tsv", memory / "records"
 
 
-def init_memory(root: Path) -> None:
+def ensure_ignored(root: Path) -> None:
+    gitignore = root / ".gitignore"
+    if gitignore.exists() and not gitignore.is_file():
+        raise MemoryError(f".gitignore is not a file: {gitignore}")
+    try:
+        content = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
+        if IGNORE_RULE in content.splitlines():
+            return
+        with gitignore.open("a", encoding="utf-8") as destination:
+            if content and not content.endswith(("\n", "\r")):
+                destination.write("\n")
+            destination.write(f"{IGNORE_RULE}\n")
+    except OSError as exc:
+        raise MemoryError(f"cannot ensure ignore rule in {gitignore}: {exc}") from exc
+    print(f"IGNORED {gitignore}")
+
+
+def init_memory(root: Path, announce: bool = True) -> None:
     memory, index, records = memory_paths(root)
     records.mkdir(parents=True, exist_ok=True)
     (memory / "drafts").mkdir(parents=True, exist_ok=True)
     if not index.exists():
         atomic_write(index, INDEX_HEADER)
-    print(f"READY {memory}")
+    ensure_ignored(root)
+    if announce:
+        print(f"READY {memory}")
 
 
 def compact_text(value: Any, field: str) -> str:
@@ -258,10 +278,14 @@ def read_index(index: Path) -> list[dict[str, str]]:
 
 
 def query_memory(root: Path, query: str, limit: int) -> int:
+    init_memory(root, announce=False)
     _, index, records = memory_paths(root)
+    if not index.is_file():
+        print("NO_INDEX")
+        return 0
     rows = read_index(index)
     if not rows:
-        print("NO_MEMORY")
+        print("EMPTY_INDEX")
         return 0
 
     terms = {term.casefold() for term in TOKEN_PATTERN.findall(query) if len(term) > 1}
