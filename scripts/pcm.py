@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compact, fingerprint-validated project code memory."""
+"""Compact, fingerprint-validated, self-pruning project code memory."""
 
 from __future__ import annotations
 
@@ -157,7 +157,7 @@ def normalize_draft(root: Path, draft: dict[str, Any]) -> dict[str, Any]:
 def load_record(path: Path) -> dict[str, Any]:
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise MemoryError(f"cannot read {path}: {exc}") from exc
     if not isinstance(record, dict) or record.get("v") != 1:
         raise MemoryError(f"unsupported record format: {path}")
@@ -262,19 +262,50 @@ def freshness(root: Path, record: dict[str, Any]) -> tuple[bool, list[str]]:
     return not changed, changed
 
 
-def read_index(index: Path) -> list[dict[str, str]]:
+def prune_record(records: Path, path: Path, identifier: str) -> None:
+    if path.parent != records or path.name != f"{identifier}.json":
+        raise MemoryError(f"refusing to prune unsafe record path: {path}")
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise MemoryError(f"cannot prune record {path}: {exc}") from exc
+    print(f"PRUNED {identifier}")
+
+
+def read_index(index: Path) -> tuple[list[dict[str, str]], bool]:
     if not index.is_file():
-        return []
+        return [], False
+    try:
+        lines = index.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        print(f"ERROR cannot read index {index}: {exc}", file=sys.stderr)
+        return [], True
+
     rows: list[dict[str, str]] = []
-    for number, line in enumerate(index.read_text(encoding="utf-8").splitlines(), start=1):
+    malformed = lines[:2] != INDEX_HEADER.splitlines()
+    if malformed:
+        print("ERROR malformed index header", file=sys.stderr)
+    seen: set[str] = set()
+    for number, line in enumerate(lines, start=1):
         if not line or line.startswith("#"):
             continue
         fields = line.split("\t")
         if len(fields) != 5:
             print(f"ERROR malformed index row {number}", file=sys.stderr)
+            malformed = True
             continue
+        identifier = fields[0]
+        if not ID_PATTERN.fullmatch(identifier):
+            print(f"ERROR invalid index id on row {number}", file=sys.stderr)
+            malformed = True
+            continue
+        if identifier in seen:
+            print(f"ERROR duplicate index id on row {number}", file=sys.stderr)
+            malformed = True
+            continue
+        seen.add(identifier)
         rows.append(dict(zip(("id", "keywords", "paths", "symbols", "summary"), fields)))
-    return rows
+    return rows, malformed
 
 
 def query_payload(record: dict[str, Any]) -> dict[str, Any]:
@@ -297,10 +328,10 @@ def query_memory(root: Path, query: str, limit: int) -> int:
     if not index.is_file():
         print("NO_INDEX")
         return 0
-    rows = read_index(index)
+    rows, repair_index = read_index(index)
     if not rows:
         print("EMPTY_INDEX")
-        return 0
+        return rebuild_index(root) if repair_index else 0
 
     terms = {term.casefold() for term in TOKEN_PATTERN.findall(query) if len(term) > 1}
     ranked: list[tuple[int, dict[str, str]]] = []
@@ -312,13 +343,14 @@ def query_memory(root: Path, query: str, limit: int) -> int:
     ranked.sort(key=lambda item: (-item[0], item[1]["id"]))
     if not ranked:
         print("NO_MATCH")
-        return 0
+        return rebuild_index(root) if repair_index else 0
 
     emitted = 0
     for score, row in ranked:
         if emitted >= limit:
             break
         path = records / f"{row['id']}.json"
+        should_prune = False
         try:
             record = load_record(path)
             if record["id"] != row["id"]:
@@ -329,10 +361,15 @@ def query_memory(root: Path, query: str, limit: int) -> int:
                 print(json.dumps(query_payload(record), ensure_ascii=False, separators=(",", ":")))
             else:
                 print(f"STALE {row['id']} {' '.join(changed)}")
+                should_prune = True
         except MemoryError as exc:
             print(f"ERROR {row['id']} {exc}")
+            should_prune = True
+        if should_prune:
+            prune_record(records, path, row["id"])
+            repair_index = True
         emitted += 1
-    return 0
+    return rebuild_index(root) if repair_index else 0
 
 
 def audit_memory(root: Path) -> int:
@@ -341,22 +378,37 @@ def audit_memory(root: Path) -> int:
         print("NO_MEMORY")
         return 0
     invalid = 0
+    pruned = 0
+    errors = 0
     total = 0
     for path in record_files(records):
         total += 1
+        should_prune = False
         try:
             record = load_record(path)
+            if path.name != f"{record['id']}.json":
+                raise MemoryError(f"record filename does not match id: {path}")
             valid, changed = freshness(root, record)
             if valid:
                 print(f"VALID {record['id']}")
             else:
                 invalid += 1
                 print(f"STALE {record['id']} {' '.join(changed)}")
+                should_prune = True
         except MemoryError as exc:
             invalid += 1
             print(f"ERROR {exc}")
-    print(f"AUDITED {total} invalid={invalid}")
-    return 1 if invalid else 0
+            should_prune = True
+        if should_prune:
+            try:
+                prune_record(records, path, path.stem)
+                pruned += 1
+            except MemoryError as exc:
+                errors += 1
+                print(f"ERROR {exc}")
+    rebuild_result = rebuild_index(root)
+    print(f"AUDITED {total} invalid={invalid} pruned={pruned}")
+    return 1 if errors or rebuild_result else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
