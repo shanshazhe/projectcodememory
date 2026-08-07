@@ -50,6 +50,8 @@ The initializer preserves unrelated `.gitignore` content and user changes.
 
 Record only new or changed reusable logic actually established after a partial hit, miss, stale record, or code change. Prefer entry points, call/data flows, ownership boundaries, invariants, persistence effects, configuration gates, and high-value test commands. Never rewrite an unchanged complete-hit record. Do not store code dumps, guesses, secrets, generated output, or facts copied without checking them.
 
+`save` keeps one canonical record for highly similar topics. Saving the same ID remains an explicit replacement. For a different ID with strongly overlapping paths, symbols, keywords, summary, and facts, `save` either reports `UNCHANGED` when the draft adds nothing or `MERGED` when it contains incremental knowledge; both outcomes retain the existing ID and summary and avoid a duplicate index row. Similar prose without shared structural scope remains a separate record.
+
 Create the JSON draft at `<primary-project-root>/projectCodeMemory/drafts/<id>.json` with this shape, then save it:
 
 ```json

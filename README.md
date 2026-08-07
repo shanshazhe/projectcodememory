@@ -9,6 +9,7 @@ The cache is local to the target repository, machine-oriented, and never a repla
 - Reuses verified architecture, control-flow, invariant, and side-effect notes.
 - Validates every record against fingerprints of its supporting source files.
 - Prunes stale or malformed records safely and repairs the searchable index.
+- Avoids duplicate records by merging highly similar, structurally anchored topics at save time.
 - Keeps all generated state under an ignored `projectCodeMemory/` directory.
 - Completely bypasses the memory workflow for projects with 10 or fewer owned source and test files.
 - Uses only the Python standard library.
@@ -74,13 +75,13 @@ python3 scripts/pcm.py audit --root /path/to/project
 | --- | --- |
 | `init` | Creates the cache directories and index, then ensures the ignore rule exists. |
 | `query` | Initializes if needed, ranks index matches, validates up to `--limit` records, and emits valid knowledge. Matching stale or invalid records are pruned and the index is repaired. The default limit is 3. |
-| `save` | Validates a draft, fingerprints its source paths, writes a normalized record, rebuilds the index, and removes the draft after success. |
+| `save` | Validates and fingerprints a draft. The same ID replaces its record; a different, highly similar topic is left `UNCHANGED` or `MERGED` into the existing ID and summary. Otherwise a new record is saved. The index is rebuilt and the draft is removed after success. |
 | `reindex` | Rebuilds the index from readable, structurally valid records. It does not check source fingerprints or perform a full cleanup. |
 | `audit` | Validates every record, prunes all stale or invalid records, and rebuilds the index. |
 
 `query` is intentionally not read-only: it can create `projectCodeMemory/`, update `.gitignore`, prune matched records, and repair the index. It only validates records selected by the query and `--limit`; use `audit` for a full-cache health check.
 
-Common status lines include `VALID`, `STALE`, `ERROR`, `PRUNED`, `EMPTY_INDEX`, `NO_MATCH`, and `NO_MEMORY`.
+Common status lines include `SAVED`, `MERGED`, `UNCHANGED`, `VALID`, `STALE`, `ERROR`, `PRUNED`, `EMPTY_INDEX`, `NO_MATCH`, and `NO_MEMORY`.
 
 ## Draft format
 

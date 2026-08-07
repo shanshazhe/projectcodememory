@@ -17,6 +17,10 @@ IGNORE_RULE = f"/{MEMORY_DIR}/"
 INDEX_HEADER = "#pcm-v1\n#id\tkeywords\tpaths\tsymbols\tsummary\n"
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 TOKEN_PATTERN = re.compile(r"[\w./:#-]+", re.UNICODE)
+WORD_PATTERN = re.compile(r"[^\W_]+", re.UNICODE)
+SIMILARITY_THRESHOLD = 0.90
+MIN_STRUCTURE_SIZE_RATIO = 0.50
+MIN_CONTENT_SIMILARITY = 0.50
 
 
 class MemoryError(ValueError):
@@ -197,6 +201,130 @@ def record_files(records: Path) -> Iterable[Path]:
     return sorted(records.glob("*.json")) if records.is_dir() else []
 
 
+def folded_set(values: Iterable[str]) -> set[str]:
+    return {value.casefold() for value in values}
+
+
+def structural_similarity(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    if min(len(left), len(right)) / max(len(left), len(right)) < MIN_STRUCTURE_SIZE_RATIO:
+        return 0.0
+    return len(left & right) / min(len(left), len(right))
+
+
+def jaccard_similarity(left: set[str], right: set[str]) -> float:
+    if not left and not right:
+        return 1.0
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def summary_tokens(value: str) -> set[str]:
+    return {token.casefold() for token in WORD_PATTERN.findall(value) if len(token) > 1}
+
+
+def topic_similarity(left: dict[str, Any], right: dict[str, Any]) -> float:
+    left_paths = set(left["p"])
+    right_paths = set(right["p"])
+    left_symbols = set(left["s"])
+    right_symbols = set(right["s"])
+    keyword_similarity = jaccard_similarity(folded_set(left["k"]), folded_set(right["k"]))
+    summary_similarity = jaccard_similarity(summary_tokens(left["sum"]), summary_tokens(right["sum"]))
+    path_similarity = structural_similarity(left_paths, right_paths)
+
+    if not left_symbols or not right_symbols:
+        if (
+            path_similarity < 1.0
+            or keyword_similarity < 0.80
+            or summary_similarity < 0.80
+        ):
+            return 0.0
+        symbol_similarity = 1.0
+    else:
+        symbol_similarity = structural_similarity(left_symbols, right_symbols)
+        if (
+            (path_similarity < 1.0 and symbol_similarity < 1.0)
+            or keyword_similarity < MIN_CONTENT_SIMILARITY
+            or summary_similarity < MIN_CONTENT_SIMILARITY
+        ):
+            return 0.0
+
+    return (
+        0.40 * path_similarity
+        + 0.35 * symbol_similarity
+        + 0.15 * keyword_similarity
+        + 0.10 * summary_similarity
+    )
+
+
+def merge_record(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(existing)
+    for field in ("k", "p", "s", "f", "flow", "inv", "fx", "verify"):
+        if field == "k":
+            seen = folded_set(existing[field])
+            merged[field] = [*existing[field]]
+            for item in incoming[field]:
+                if item.casefold() not in seen:
+                    seen.add(item.casefold())
+                    merged[field].append(item)
+        else:
+            merged[field] = list(dict.fromkeys([*existing[field], *incoming[field]]))
+    merged["fp"] = {
+        path: incoming["fp"].get(path, existing["fp"].get(path))
+        for path in merged["p"]
+    }
+    return merged
+
+
+def adds_knowledge(existing: dict[str, Any], incoming: dict[str, Any]) -> bool:
+    if not folded_set(incoming["k"]).issubset(folded_set(existing["k"])):
+        return True
+    return any(
+        not set(incoming[field]).issubset(existing[field])
+        for field in ("p", "s", "f", "flow", "inv", "fx", "verify")
+    )
+
+
+def has_fact_continuity(existing: dict[str, Any], incoming: dict[str, Any]) -> bool:
+    return bool(folded_set(existing["f"]) & folded_set(incoming["f"]))
+
+
+def find_similar_record(
+    root: Path, records: Path, incoming: dict[str, Any]
+) -> tuple[dict[str, Any] | None, float]:
+    candidates: list[tuple[float, str, dict[str, Any]]] = []
+    for path in record_files(records):
+        try:
+            record = load_record(path)
+        except MemoryError as exc:
+            print(f"ERROR {path.stem} {exc}")
+            prune_record(records, path, path.stem)
+            continue
+        if path.name != f"{record['id']}.json":
+            print(f"ERROR record filename does not match id: {path}")
+            prune_record(records, path, path.stem)
+            continue
+        if record["id"] == incoming["id"]:
+            continue
+        similarity = topic_similarity(record, incoming)
+        if similarity < SIMILARITY_THRESHOLD:
+            continue
+        valid, changed = freshness(root, record)
+        if not valid:
+            print(f"STALE {record['id']} {' '.join(changed)}")
+            prune_record(records, path, record["id"])
+            continue
+        if not has_fact_continuity(record, incoming):
+            continue
+        candidates.append((similarity, record["id"], record))
+    if not candidates:
+        return None, 0.0
+    similarity, _, record = min(candidates, key=lambda item: (-item[0], item[1]))
+    return record, similarity
+
+
 def clean_index_field(value: str) -> str:
     return " ".join(value.replace("\t", " ").split())
 
@@ -243,8 +371,21 @@ def save_record(root: Path, draft_path: str) -> int:
     record = normalize_draft(root, draft)
     _, _, records = memory_paths(root)
     destination = records / f"{record['id']}.json"
-    atomic_write(destination, json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
-    print(f"SAVED {record['id']}")
+    replace_same_id = destination.exists()
+    existing, similarity = find_similar_record(root, records, record)
+    if replace_same_id:
+        existing = None
+
+    if existing is None:
+        atomic_write(destination, json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        print(f"SAVED {record['id']}")
+    elif adds_knowledge(existing, record):
+        merged = merge_record(existing, record)
+        destination = records / f"{existing['id']}.json"
+        atomic_write(destination, json.dumps(merged, ensure_ascii=False, separators=(",", ":")) + "\n")
+        print(f"MERGED {record['id']} into={existing['id']} similarity={similarity:.2f}")
+    else:
+        print(f"UNCHANGED {record['id']} duplicate-of={existing['id']} similarity={similarity:.2f}")
     result = rebuild_index(root)
     if result == 0:
         draft_file.unlink()
