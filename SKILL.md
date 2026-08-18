@@ -48,7 +48,7 @@ The initializer preserves unrelated `.gitignore` content and user changes.
 
 ## Record verified knowledge
 
-Record only new or changed reusable logic actually established after a partial hit, miss, stale record, or code change. Prefer entry points, call/data flows, ownership boundaries, invariants, persistence effects, configuration gates, and high-value test commands. Never rewrite an unchanged complete-hit record. Do not store code dumps, guesses, secrets, generated output, or facts copied without checking them.
+Record only new or changed reusable logic actually established after a partial hit, miss, stale record, or code change. Prefer entry points, call/data flows, ownership boundaries, invariants, persistence effects, configuration gates, and high-value test commands. Never rewrite an unchanged complete-hit record. Small mechanical edits such as DTO plumbing, builder copy changes, and test adaptation do not merit a record unless they establish reusable behavior. Do not store code dumps, guesses, secrets, generated output, or facts copied without checking them.
 
 `save` keeps one canonical record for highly similar topics. Saving the same ID remains an explicit replacement. For a different ID with strongly overlapping paths, symbols, keywords, summary, and facts, `save` either reports `UNCHANGED` when the draft adds nothing or `MERGED` when it contains incremental knowledge; both outcomes retain the existing ID and summary and avoid a duplicate index row. Similar prose without shared structural scope remains a separate record.
 
@@ -73,19 +73,24 @@ Create the JSON draft at `<primary-project-root>/projectCodeMemory/drafts/<id>.j
 python3 <skill-dir>/scripts/pcm.py save --root <primary-project-root> <primary-project-root>/projectCodeMemory/drafts/<id>.json
 ```
 
-The tool rejects drafts outside `projectCodeMemory/drafts/`, recomputes SHA-256 fingerprints for every supporting path, writes compact JSON under `projectCodeMemory/records/`, rebuilds `index.tsv`, and deletes the consumed draft. Keep each record scoped to one coherent topic. Include every source file needed to support cross-file conclusions.
+The tool rejects drafts outside `projectCodeMemory/drafts/`, recomputes SHA-256 fingerprints for every supporting path, writes compact JSON under `projectCodeMemory/records/`, rebuilds `index.tsv`, and deletes the consumed draft.
+
+Treat `paths` as the record's smallest sufficient evidence set, not as a log of files browsed, edited, tested, or encountered along a call chain. Include a file only when its current contents are necessary to support a stored fact, flow, invariant, or side effect. A shared controller, service, helper, caller, callee, build file, or test file does not belong in `paths` merely because it provided navigation, was changed during the task, or participated in verification. Record test commands and results under `verification`; that alone does not make the test files evidence paths.
+
+Keep each record scoped to one coherent topic. Cross-file conclusions must still include every file whose contents are genuinely necessary evidence; never omit a real dependency just to avoid invalidation. When a shared file supports only part of a broader topic or would bind independently changing behavior together, split the knowledge into smaller records.
 
 ## Finish every code task
 
 1. If the task was answered entirely by complete `VALID` hits and no code changed, stop with no memory writes or audit.
 2. If source inspection produced reusable new facts, save only those facts. For analysis-only tasks, exact current-source inspection is valid verification; do not claim that tests ran.
-3. For code changes, update records whose supporting files changed after relevant checks pass. If checks could not run, record the exact source-based verification and limitation.
+3. For code changes, update a task-relevant record only when the change creates or alters reusable knowledge captured by that record. A supporting file becoming stale does not by itself require immediate replacement; future `query` calls validate before use and prune stale matches. If a replacement is warranted but checks could not run, record the exact source-based verification and limitation.
 4. For records pruned by `query`, re-read only their scope and save a replacement when the logic still exists and remains reusable.
-5. Run `audit --root <primary-project-root>` only after code or memory writes that may affect records. It prunes all stale or invalid records and rebuilds the index; `query` deliberately leaves unmatched records untouched to stay fast.
+5. Do not run `audit` after ordinary source changes or a normal single-record `save`. `save` fingerprints its evidence and rebuilds the index; `query` validates matching records before returning them and prunes stale matches. Run `audit --root <primary-project-root>` only for deliberate full-cache maintenance, such as a broad refactor or batch file change likely to stale many records, suspected cache corruption, or manual or abnormal cache modification.
 
 ## Integrity rules
 
 - A fingerprint mismatch always overrides the remembered conclusion.
+- An unmatched stale record may remain on disk until a relevant query or maintenance audit reaches it. This is not a trust risk: `query` must validate its fingerprints before emitting it as `VALID`.
 - Automatically delete the corresponding cache record and index entry after a fingerprint mismatch or invalid record is verified. Never derive a deletion path from an invalid index ID.
 - Never edit stored fingerprints by hand; `save` owns them.
 - Never claim verification stronger than what was performed.

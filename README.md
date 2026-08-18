@@ -8,6 +8,7 @@ The cache is local to the target repository, machine-oriented, and never a repla
 
 - Reuses verified architecture, control-flow, invariant, and side-effect notes.
 - Validates every record against fingerprints of its supporting source files.
+- Uses the smallest sufficient evidence set to avoid invalidating unrelated knowledge.
 - Prunes stale or malformed records safely and repairs the searchable index.
 - Avoids duplicate records by merging highly similar, structurally anchored topics at save time.
 - Keeps all generated state under an ignored `projectCodeMemory/` directory.
@@ -36,8 +37,8 @@ Codex can also select the skill automatically when a task matches its descriptio
 2. For 10 files or fewer, skip the memory workflow entirely.
 3. For larger projects, pin one primary project root and query memory before broadly scanning source.
 4. Reuse complete fingerprint-valid hits and inspect only missing or stale details.
-5. Save newly verified, reusable knowledge with the source files that support it.
-6. Audit the cache after relevant code or memory changes.
+5. Save only newly verified, reusable knowledge, with the smallest sufficient set of source files that directly supports it.
+6. Let normal queries validate and prune matched records; reserve full-cache audits for deliberate maintenance.
 
 Directories outside the primary project are treated as read-only references. The skill never creates a second memory cache for them.
 
@@ -79,7 +80,7 @@ python3 scripts/pcm.py audit --root /path/to/project
 | `reindex` | Rebuilds the index from readable, structurally valid records. It does not check source fingerprints or perform a full cleanup. |
 | `audit` | Validates every record, prunes all stale or invalid records, and rebuilds the index. |
 
-`query` is intentionally not read-only: it can create `projectCodeMemory/`, update `.gitignore`, prune matched records, and repair the index. It only validates records selected by the query and `--limit`; use `audit` for a full-cache health check.
+`query` is intentionally not read-only: it can create `projectCodeMemory/`, update `.gitignore`, prune matched records, and repair the index. It only validates records selected by the query and `--limit`; use `audit` for a deliberate full-cache health check after broad changes or when corruption is suspected. Unmatched stale records may remain until a later query or audit, but they are never returned as `VALID` without fingerprint validation.
 
 Common status lines include `SAVED`, `MERGED`, `UNCHANGED`, `VALID`, `STALE`, `ERROR`, `PRUNED`, `EMPTY_INDEX`, `NO_MATCH`, and `NO_MEMORY`.
 
@@ -91,7 +92,7 @@ Drafts must live inside `<root>/projectCodeMemory/drafts/` and use repository-re
 {
   "id": "authentication-flow",
   "keywords": ["auth", "login", "session"],
-  "paths": ["src/auth.py", "tests/test_auth.py"],
+  "paths": ["src/auth.py"],
   "symbols": ["authenticate", "SessionStore"],
   "summary": "Authentication routing and session ownership",
   "facts": ["authenticate validates credentials before creating a session"],
@@ -103,6 +104,8 @@ Drafts must live inside `<root>/projectCodeMemory/drafts/` and use repository-re
 ```
 
 Required, non-empty fields are `id`, `keywords`, `paths`, `summary`, `facts`, and `verification`. The `id` must match `[a-z0-9][a-z0-9._-]{0,79}`. Every path must resolve to an existing file inside the target project and must not point into `projectCodeMemory/`.
+
+`paths` is an invalidation dependency list, not a research log. Include a file only when its current contents directly support a stored fact, flow, invariant, or side effect. Browsed files, incidental callers, shared wrappers, build files, and tests used only for verification should stay out of `paths`; keep commands and results in `verification`. Do not omit genuinely necessary cross-file evidence. Split independent topics into separate records when that keeps their evidence and change cadence separate.
 
 The CLI stores normalized records rather than generating analysis itself. Codex is responsible for inspecting the code, verifying conclusions, and preparing the draft.
 
