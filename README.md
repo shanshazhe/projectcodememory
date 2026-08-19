@@ -12,7 +12,9 @@ The cache is local to the target repository, machine-oriented, and never a repla
 - Prunes stale or malformed records safely and repairs the searchable index.
 - Avoids duplicate records by merging highly similar, structurally anchored topics at save time.
 - Keeps all generated state under an ignored `projectCodeMemory/` directory.
-- Completely bypasses the memory workflow for projects with 10 or fewer owned source and test files.
+- Activates only for broad, cross-file, unfamiliar, or recurring code work; narrow tasks skip its fixed overhead.
+- Avoids first-time memory setup for projects with 10 or fewer owned source and test files.
+- Keeps low-frequency record-authoring details in an on-demand reference instead of every skill load.
 - Uses only the Python standard library.
 
 ## Install as a Codex skill
@@ -33,12 +35,13 @@ Codex can also select the skill automatically when a task matches its descriptio
 
 ## How the workflow behaves
 
-1. Count repository-owned source and test files without reading their contents.
-2. For 10 files or fewer, skip the memory workflow entirely.
-3. For larger projects, pin one primary project root and query memory before broadly scanning source.
-4. Reuse complete fingerprint-valid hits and inspect only missing or stale details.
-5. Save only newly verified, reusable knowledge, with the smallest sufficient set of source files that directly supports it.
-6. Let normal queries validate and prune matched records; reserve full-cache audits for deliberate maintenance.
+1. Skip the workflow for narrow work already pinned to one or two exact files or symbols.
+2. Pin one primary project root. On first use, count repository-owned source and test paths without reading contents and stop as soon as the count reaches 11; an existing cache skips this count.
+3. With no existing cache, bypass first-time memory setup when the count is 10 or fewer.
+4. For eligible projects, query memory before reading or broadly searching source content, using `--limit 1` for focused work and up to three only for genuinely cross-cutting work.
+5. Reuse complete fingerprint-valid hits and inspect only missing, stale, or exact edit details.
+6. Save only newly verified, stable, reusable knowledge that passes the save gate; load the record-authoring reference only when a save is warranted.
+7. Let normal queries validate and prune matched records; reserve full-cache audits for deliberate maintenance.
 
 Directories outside the primary project are treated as read-only references. The skill never creates a second memory cache for them.
 
@@ -117,4 +120,4 @@ Requires Python 3.9 or newer. Run the test suite with:
 python3 -m unittest discover -s tests -v
 ```
 
-See [`SKILL.md`](SKILL.md) for the complete agent workflow and safety rules.
+See [`SKILL.md`](SKILL.md) for the core agent workflow and safety rules. Record-authoring details live in [`references/record-format.md`](references/record-format.md) and are loaded only when needed.

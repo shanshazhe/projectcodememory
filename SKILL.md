@@ -1,100 +1,75 @@
 ---
 name: project-code-memory
-description: ALWAYS load this skill FIRST, before any repository code analysis, debugging, implementation, fix, refactor, test, or read-only exploration — including before dispatching an Explore/general-purpose agent or running rg/grep/find over the codebase. MUST TRIGGER before that first broad source scan on any project with more than 10 repository-owned source and test files. Query the projectCodeMemory index before rereading source; reuse complete valid hits, fill only gaps, and let query prune stale entries. Bypass entirely (no init/query/save) for projects at or below the 10-file threshold.
+description: Reuses SHA-256-verified knowledge to avoid repeated source scans in large codebases. Use before broad or cross-file repository analysis, unfamiliar debugging or implementation, architecture and invariant tracing, or recurring domain questions where prior analysis may exist. Do not use for non-code tasks or narrowly scoped work already pinned to one or two exact files or symbols, such as typos, mechanical edits, and direct lookups; avoid first-time setup in projects with 10 or fewer owned source/test files.
 ---
 
 # Project Code Memory
 
-For non-tiny projects, use `projectCodeMemory/` as an ignored, machine-oriented cache. Put every file created solely for code memory inside this folder. Current source remains authoritative, but a `VALID` record is a fingerprint-verified proxy for its supporting files; never reopen those files merely to reconfirm remembered facts.
+Use `projectCodeMemory/` as a compact, ignored cache of verified code knowledge. Optimize total investigation cost, not the number of records. Current source is authoritative; a fingerprint-valid record is a trusted proxy only for the files and facts it covers.
 
-## Start every code task
+## 1. Eligibility gate
 
-1. Pin `PRIMARY_PROJECT_ROOT` once. Use the nearest repository root containing the task's initial working directory, or that initial directory when it is not in a repository. Do not recompute it after changing directories or following code into another folder.
-2. Before any `pcm.py` command, count project-owned source and test files without reading their contents. When Git exists, count tracked plus non-ignored untracked files. Exclude vendored, generated, dependency, build-output, and existing `projectCodeMemory/` files.
-   - **10 files or fewer**: Treat the project as tiny and stop this skill's memory workflow for the whole task. Do not run `init`, `query`, `save`, `reindex`, or `audit`; do not create, modify, or delete anything under `projectCodeMemory/`; and do not add, change, or remove its `.gitignore` rule. Leave any existing memory and ignore entry untouched and inspect source normally. This bypass overrides every later memory, finish, pruning, and integrity instruction.
-   - **More than 10 files**: Before any broad source scan, make `query` the first repository command after this count, even for read-only analysis:
+Pin `PRIMARY_PROJECT_ROOT` once to the repository that owns the code the user asked about. Default to the nearest repository containing the task's initial working directory; change roots only when the user explicitly switches the target project.
 
-     ```bash
-     python3 <skill-dir>/scripts/pcm.py query --root <primary-project-root> "<task terms, paths, or symbols>"
-     ```
+Use this workflow only when the task benefits from broad, cross-file, unfamiliar, or repeated code reasoning. Skip it for localized work that can be completed with at most one or two known source reads.
 
-     `query` automatically and idempotently creates `projectCodeMemory/index.tsv`, `records/`, and `drafts/` in the primary project when absent and ensures only its root `.gitignore` contains `/projectCodeMemory/`.
+Before the first source-content read:
 
-3. Choose exactly one path from the query result:
-   - **Complete hit**: `VALID` records contain every fact needed for a read-only answer. Stop discovery and answer from memory. Do not run `rg`, `find`, source reads, searches, save, reindex, or audit.
-   - **Partial hit**: `VALID` records answer only part of the task. Keep their facts and inspect only the explicitly missing symbols or details. Do not broadly rediscover remembered flows.
-   - **Miss or invalid**: `STALE`, `ERROR`, `NO_MATCH`, or `EMPTY_INDEX`. `query` automatically prunes matched stale or invalid records and repairs their index entries. Inspect current source for the uncovered scope and save a replacement only after verification.
-4. For a code change with a complete architectural hit, trust remembered structure and invariants. Read only the exact edit sites and tests needed to make the change; do not reconstruct the surrounding architecture.
-5. Query again only when a newly discovered symbol or path may match another record needed for an actual gap.
+1. If `<root>/projectCodeMemory/` already exists, skip counting and continue to **Query first**.
+2. Otherwise, count repository-owned source and test file paths without reading their contents. Include tracked and non-ignored untracked files; exclude vendored dependencies, generated files, build outputs, and caches. Stop once the count reaches 11.
+3. If the count is 10 or fewer, bypass this skill for the rest of the task. Do not initialize memory or modify `.gitignore`.
 
-`<skill-dir>` means the absolute directory containing this `SKILL.md`; resolve it from the loaded skill location.
+## 2. Query first
 
-For a non-tiny project, invoking this skill authorizes cache writes only to `projectCodeMemory/` plus the required `.gitignore` rule, including during read-only analysis. Do not change source, tests, build files, or other project configuration unless the user requested code changes.
-
-The root-relative ignore rule is:
-
-```gitignore
-/projectCodeMemory/
-```
-
-The initializer preserves unrelated `.gitignore` content and user changes.
-
-## Cross-folder analysis
-
-- Treat every folder or repository outside `PRIMARY_PROJECT_ROOT` as a secondary, read-only reference for memory purposes.
-- Never pass a secondary folder to `--root`, run memory commands for it, create `projectCodeMemory/` inside it, or modify its `.gitignore`.
-- Do not store external-only code logic in the primary project's memory. If external code explains an integration, record only the primary project's behavior and only with supporting source paths inside `PRIMARY_PROJECT_ROOT`.
-- Keep the primary root fixed for the whole task. Change it only when the user explicitly switches the target project.
-
-## Record verified knowledge
-
-Record only new or changed reusable logic actually established after a partial hit, miss, stale record, or code change. Prefer entry points, call/data flows, ownership boundaries, invariants, persistence effects, configuration gates, and high-value test commands. Never rewrite an unchanged complete-hit record. Small mechanical edits such as DTO plumbing, builder copy changes, and test adaptation do not merit a record unless they establish reusable behavior. Do not store code dumps, guesses, secrets, generated output, or facts copied without checking them.
-
-`save` keeps one canonical record for highly similar topics. Saving the same ID remains an explicit replacement. For a different ID with strongly overlapping paths, symbols, keywords, summary, and facts, `save` either reports `UNCHANGED` when the draft adds nothing or `MERGED` when it contains incremental knowledge; both outcomes retain the existing ID and summary and avoid a duplicate index row. Similar prose without shared structural scope remains a separate record.
-
-Create the JSON draft at `<primary-project-root>/projectCodeMemory/drafts/<id>.json` with this shape, then save it:
-
-```json
-{
-  "id": "stable-topic-id",
-  "keywords": ["search", "terms"],
-  "paths": ["exact/supporting/File.java"],
-  "symbols": ["Class#method"],
-  "summary": "One compact routing summary",
-  "facts": ["Dense, independently useful fact"],
-  "flows": ["entry -> validation -> persistence -> event"],
-  "invariants": ["Condition that must remain true"],
-  "side_effects": ["Database or event effect"],
-  "verification": ["test command/result or exact source inspection"]
-}
-```
+For an eligible project, make the memory query the first content-discovery operation. Build a focused query from the user's domain terms plus any known paths, classes, methods, event names, or error codes; avoid generic filler words.
 
 ```bash
-python3 <skill-dir>/scripts/pcm.py save --root <primary-project-root> <primary-project-root>/projectCodeMemory/drafts/<id>.json
+python3 <skill-dir>/scripts/pcm.py query \
+  --root <primary-project-root> \
+  --limit 1 \
+  "<focused task terms, paths, and symbols>"
 ```
 
-The tool rejects drafts outside `projectCodeMemory/drafts/`, recomputes SHA-256 fingerprints for every supporting path, writes compact JSON under `projectCodeMemory/records/`, rebuilds `index.tsv`, and deletes the consumed draft.
+Use `--limit 1` for a focused question or one flow; raise it to at most `3` only when the task genuinely spans independent topics. `query` initializes memory when absent, ensures the root `.gitignore` contains `/projectCodeMemory/`, validates matching fingerprints, and prunes matched stale or malformed records.
 
-Treat `paths` as the record's smallest sufficient evidence set, not as a log of files browsed, edited, tested, or encountered along a call chain. Include a file only when its current contents are necessary to support a stored fact, flow, invariant, or side effect. A shared controller, service, helper, caller, callee, build file, or test file does not belong in `paths` merely because it provided navigation, was changed during the task, or participated in verification. Record test commands and results under `verification`; that alone does not make the test files evidence paths.
+Choose one path:
 
-Keep each record scoped to one coherent topic. Cross-file conclusions must still include every file whose contents are genuinely necessary evidence; never omit a real dependency just to avoid invalidation. When a shared file supports only part of a broader topic or would bind independently changing behavior together, split the knowledge into smaller records.
+- **Complete `VALID` hit:** For read-only work, answer directly from the record and do not reopen its evidence files merely to reconfirm it. For a code change, read only the exact edit sites and relevant tests.
+- **Partial `VALID` hit:** Keep the valid facts and inspect only the explicitly missing behavior or symbols.
+- **`NO_MATCH`, `EMPTY_INDEX`, `STALE`, or `ERROR`:** Inspect current source, starting with targeted symbol/path searches rather than a broad rescan.
 
-## Finish every code task
+Query again only when discovery exposes a genuinely new symbol or subsystem that could match a different record. Do not loop over paraphrased queries.
 
-1. If the task was answered entirely by complete `VALID` hits and no code changed, stop with no memory writes or audit.
-2. If source inspection produced reusable new facts, save only those facts. For analysis-only tasks, exact current-source inspection is valid verification; do not claim that tests ran.
-3. For code changes, update a task-relevant record only when the change creates or alters reusable knowledge captured by that record. A supporting file becoming stale does not by itself require immediate replacement; future `query` calls validate before use and prune stale matches. If a replacement is warranted but checks could not run, record the exact source-based verification and limitation.
-4. For records pruned by `query`, re-read only their scope and save a replacement when the logic still exists and remains reusable.
-5. Do not run `audit` after ordinary source changes or a normal single-record `save`. `save` fingerprints its evidence and rebuilds the index; `query` validates matching records before returning them and prunes stale matches. Run `audit --root <primary-project-root>` only for deliberate full-cache maintenance, such as a broad refactor or batch file change likely to stale many records, suspected cache corruption, or manual or abnormal cache modification.
+## 3. Use memory narrowly
 
-## Integrity rules
+- Treat a record as authority only for its stated facts, flows, invariants, side effects, and fingerprinted paths.
+- Read current source for uncovered details, exact edit context, or behavior not stated in the record.
+- Never infer that an omitted fact is false.
+- Keep one fixed primary root. Code outside it is a secondary, read-only reference: never initialize memory there or store external-only behavior in the primary cache.
 
-- A fingerprint mismatch always overrides the remembered conclusion.
-- An unmatched stale record may remain on disk until a relevant query or maintenance audit reaches it. This is not a trust risk: `query` must validate its fingerprints before emitting it as `VALID`.
-- Automatically delete the corresponding cache record and index entry after a fingerprint mismatch or invalid record is verified. Never derive a deletion path from an invalid index ID.
-- Never edit stored fingerprints by hand; `save` owns them.
-- Never claim verification stronger than what was performed.
-- Keep index summaries and records terse: navigation and invariants, not prose documentation.
-- One task has exactly one memory root: `<primary-project-root>/projectCodeMemory/`.
-- Keep indexes, records, drafts, scratch notes, manifests, state, locks, and temporary output created for this memory workflow under `projectCodeMemory/`. Never place them in the repository root, source tree, `/tmp`, user home, or the skill directory.
-- Never commit `projectCodeMemory/`.
+## 4. Save only high-value knowledge
+
+Save a record only when all are true:
+
+1. The task established new or changed knowledge through current-source inspection or a verified code change.
+2. The knowledge is stable and likely to help a future task.
+3. It captures a meaningful flow, ownership boundary, invariant, persistence/event side effect, configuration gate, or similarly non-obvious behavior.
+4. A small set of repository files directly supports every stored claim.
+
+Do **not** save line numbers, code dumps, localized implementation trivia, transient failures, guesses, secrets, routine DTO plumbing, mechanical edits, or facts already covered by an unchanged complete hit.
+
+When the save gate passes, read [references/record-format.md](references/record-format.md) completely, create the draft there described, and run `save`. Otherwise finish without a memory write. If future value is uncertain, do not save.
+
+For code changes:
+
+- Update a loaded record when the change alters its reusable knowledge.
+- If an evidence path changed but the facts did not, refresh the record only when it was task-relevant and revalidation is cheap; otherwise let a future query prune it.
+- Do not run a full audit after an ordinary change or single save.
+
+## 5. Integrity and maintenance
+
+- A fingerprint mismatch always overrides remembered conclusions.
+- Never edit stored fingerprints, compact records, or `index.tsv` by hand; use the CLI.
+- Keep every cache artifact under `<root>/projectCodeMemory/` and never commit it.
+- `query` may write only that cache plus the root ignore rule; it must not modify source or project configuration.
+- Run `audit --root <root>` only for deliberate full-cache maintenance, broad refactors likely to stale many records, or suspected corruption.
