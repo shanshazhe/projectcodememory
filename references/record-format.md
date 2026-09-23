@@ -28,7 +28,7 @@ Required, non-empty fields are `id`, `keywords`, `paths`, `summary`, `facts`, an
 - **id:** Stable topic name, not a task or ticket number unless the ticket itself is the lasting concept.
 - **keywords:** User vocabulary plus exact domain terms that a future query is likely to contain.
 - **paths:** The smallest sufficient invalidation dependency set.
-- **symbols:** Exact classes, methods, endpoints, event types, properties, or database objects that improve retrieval.
+- **symbols:** Exact source literals for classes, methods, endpoints, event types, properties, or database objects that improve retrieval. Prefer identifiers that `query --locate` can find verbatim inside an evidence path; line numbers are resolved on demand and must not be stored.
 - **summary:** One compact routing or ownership sentence.
 - **facts:** Dense, independently useful statements; each must be supported by `paths`.
 - **flows:** Important entry-to-effect chains using concise arrows.

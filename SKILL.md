@@ -30,11 +30,11 @@ python3 <skill-dir>/scripts/pcm.py query \
   "<focused task terms, paths, and symbols>"
 ```
 
-Use `--limit 1` for a focused question or one flow; raise it to at most `3` only when the task genuinely spans independent topics. `query` initializes memory when absent, ensures the root `.gitignore` contains `/projectCodeMemory/`, validates matching fingerprints, and prunes matched stale or malformed records.
+Use `--limit 1` for a focused question or one flow; raise it to at most `3` only when the task genuinely spans independent topics. The limit counts fingerprint-valid records, so stale or malformed higher-ranked candidates are pruned without hiding a later valid hit. Add `--locate` for code changes or reviews when current `path:line` matches for saved symbols would avoid another navigation search; omit it for read-only questions that need only the stored knowledge. `query` initializes memory when absent, ensures the root `.gitignore` contains `/projectCodeMemory/`, validates matching fingerprints, and prunes matched stale or malformed records.
 
 Choose one path:
 
-- **Complete `VALID` hit:** For read-only work, answer directly from the record and do not reopen its evidence files merely to reconfirm it. For a code change, read only the exact edit sites and relevant tests.
+- **Complete `VALID` hit:** For read-only work, answer directly from the record and do not reopen its evidence files merely to reconfirm it. For a code change, use `--locate` results when available, then read only the exact edit sites and relevant tests.
 - **Partial `VALID` hit:** Keep the valid facts and inspect only the explicitly missing behavior or symbols.
 - **`NO_MATCH`, `EMPTY_INDEX`, `STALE`, or `ERROR`:** Inspect current source, starting with targeted symbol/path searches rather than a broad rescan.
 
@@ -69,7 +69,7 @@ For code changes:
 ## 5. Integrity and maintenance
 
 - A fingerprint mismatch always overrides remembered conclusions.
-- Never edit stored fingerprints, compact records, or `index.tsv` by hand; use the CLI.
+- Never edit stored fingerprints, compact records, or `index.tsv` by hand; use the CLI. CLI operations serialize through a repository-local lock and use atomic replacement, so concurrent agents should invoke the CLI rather than manipulating cache files directly.
 - Keep every cache artifact under `<root>/projectCodeMemory/` and never commit it.
 - `query` may write only that cache plus the root ignore rule; it must not modify source or project configuration.
 - Run `audit --root <root>` only for deliberate full-cache maintenance, broad refactors likely to stale many records, or suspected corruption.

@@ -6,10 +6,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 
 MEMORY_DIR = "projectCodeMemory"
@@ -21,17 +25,102 @@ WORD_PATTERN = re.compile(r"[^\W_]+", re.UNICODE)
 SIMILARITY_THRESHOLD = 0.90
 MIN_STRUCTURE_SIZE_RATIO = 0.50
 MIN_CONTENT_SIMILARITY = 0.50
+LOCK_TIMEOUT_SECONDS = 10.0
+LOCK_RETRY_SECONDS = 0.05
+MAX_LOCATIONS_PER_SYMBOL = 5
+MAX_SYMBOLS_TO_LOCATE = 50
+MAX_LOCATION_ERRORS = 10
 
 
 class MemoryError(ValueError):
     pass
 
 
+def _acquire_file_lock(handle: Any) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _release_file_lock(handle: Any) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def memory_lock(root: Path, timeout: float = LOCK_TIMEOUT_SECONDS) -> Iterator[None]:
+    memory = root / MEMORY_DIR
+    memory.mkdir(parents=True, exist_ok=True)
+    lock_path = memory / ".lock"
+    try:
+        handle = lock_path.open("a+b")
+    except OSError as exc:
+        raise MemoryError(f"cannot open memory lock {lock_path}: {exc}") from exc
+
+    acquired = False
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"0")
+            handle.flush()
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            try:
+                _acquire_file_lock(handle)
+                acquired = True
+                break
+            except OSError as exc:
+                if time.monotonic() >= deadline:
+                    raise MemoryError(f"timed out waiting for memory lock {lock_path}") from exc
+                time.sleep(LOCK_RETRY_SECONDS)
+        yield
+    finally:
+        if acquired:
+            try:
+                _release_file_lock(handle)
+            except OSError:
+                pass
+        handle.close()
+
+
 def atomic_write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(content, encoding="utf-8")
-    temporary.replace(path)
+    descriptor = -1
+    temporary: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        temporary = Path(temporary_name)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as destination:
+            descriptor = -1
+            destination.write(content)
+            destination.flush()
+            os.fsync(destination.fileno())
+        os.replace(temporary, path)
+    except OSError as exc:
+        raise MemoryError(f"cannot atomically write {path}: {exc}") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def resolve_root(value: str) -> Path:
@@ -63,7 +152,7 @@ def ensure_ignored(root: Path) -> None:
     print(f"IGNORED {gitignore}")
 
 
-def init_memory(root: Path, announce: bool = True) -> None:
+def _init_memory(root: Path, announce: bool = True) -> None:
     memory, index, records = memory_paths(root)
     records.mkdir(parents=True, exist_ok=True)
     (memory / "drafts").mkdir(parents=True, exist_ok=True)
@@ -72,6 +161,11 @@ def init_memory(root: Path, announce: bool = True) -> None:
     ensure_ignored(root)
     if announce:
         print(f"READY {memory}")
+
+
+def init_memory(root: Path, announce: bool = True) -> None:
+    with memory_lock(root):
+        _init_memory(root, announce)
 
 
 def compact_text(value: Any, field: str) -> str:
@@ -329,7 +423,7 @@ def clean_index_field(value: str) -> str:
     return " ".join(value.replace("\t", " ").split())
 
 
-def rebuild_index(root: Path) -> int:
+def _rebuild_index(root: Path) -> int:
     _, index, records = memory_paths(root)
     rows: list[str] = []
     errors = 0
@@ -359,8 +453,13 @@ def rebuild_index(root: Path) -> int:
     return 1 if errors else 0
 
 
-def save_record(root: Path, draft_path: str) -> int:
-    init_memory(root)
+def rebuild_index(root: Path) -> int:
+    with memory_lock(root):
+        return _rebuild_index(root)
+
+
+def _save_record(root: Path, draft_path: str) -> int:
+    _init_memory(root)
     draft_file = confined_draft_path(root, draft_path)
     try:
         draft = json.loads(draft_file.read_text(encoding="utf-8"))
@@ -386,19 +485,46 @@ def save_record(root: Path, draft_path: str) -> int:
         print(f"MERGED {record['id']} into={existing['id']} similarity={similarity:.2f}")
     else:
         print(f"UNCHANGED {record['id']} duplicate-of={existing['id']} similarity={similarity:.2f}")
-    result = rebuild_index(root)
+    result = _rebuild_index(root)
     if result == 0:
         draft_file.unlink()
     return result
+
+
+def save_record(root: Path, draft_path: str) -> int:
+    with memory_lock(root):
+        return _save_record(root, draft_path)
 
 
 def freshness(root: Path, record: dict[str, Any]) -> tuple[bool, list[str]]:
     changed: list[str] = []
     for relative in record["p"]:
         candidate = root / relative
-        if not candidate.is_file():
+        try:
+            resolved = candidate.resolve(strict=True)
+        except FileNotFoundError:
             changed.append(f"{relative}:missing")
-        elif fingerprint(candidate) != record["fp"].get(relative):
+            continue
+        except OSError:
+            changed.append(f"{relative}:unreadable")
+            continue
+        try:
+            resolved_relative = resolved.relative_to(root).as_posix()
+        except ValueError:
+            changed.append(f"{relative}:unsafe")
+            continue
+        if resolved_relative != relative:
+            changed.append(f"{relative}:redirected")
+            continue
+        if not resolved.is_file():
+            changed.append(f"{relative}:missing")
+            continue
+        try:
+            current_fingerprint = fingerprint(resolved)
+        except OSError:
+            changed.append(f"{relative}:unreadable")
+            continue
+        if current_fingerprint != record["fp"].get(relative):
             changed.append(f"{relative}:changed")
     return not changed, changed
 
@@ -449,8 +575,50 @@ def read_index(index: Path) -> tuple[list[dict[str, str]], bool]:
     return rows, malformed
 
 
-def query_payload(record: dict[str, Any]) -> dict[str, Any]:
+def locate_symbols(root: Path, record: dict[str, Any]) -> dict[str, Any]:
+    selected_symbols = record["s"][:MAX_SYMBOLS_TO_LOCATE]
+    matches: dict[str, list[dict[str, Any]]] = {symbol: [] for symbol in selected_symbols}
+    truncated: set[str] = set()
+    errors: list[str] = []
+    error_count = 0
+    for relative in record["p"]:
+        candidate = root / relative
+        try:
+            resolved = candidate.resolve(strict=True)
+            if resolved.relative_to(root).as_posix() != relative:
+                raise ValueError("source path was redirected")
+            with resolved.open("r", encoding="utf-8") as source:
+                for line_number, line in enumerate(source, start=1):
+                    for symbol in selected_symbols:
+                        if symbol not in line:
+                            continue
+                        locations = matches[symbol]
+                        if len(locations) < MAX_LOCATIONS_PER_SYMBOL:
+                            locations.append({"path": relative, "line": line_number})
+                        else:
+                            truncated.add(symbol)
+        except (OSError, UnicodeError, ValueError) as exc:
+            error_count += 1
+            if len(errors) < MAX_LOCATION_ERRORS:
+                errors.append(f"{relative}: {exc}")
+    omitted_symbols = len(record["s"]) - len(selected_symbols)
     return {
+        "symbols": [
+            {
+                "symbol": symbol,
+                "matches": matches[symbol],
+                **({"truncated": True} if symbol in truncated else {}),
+            }
+            for symbol in selected_symbols
+        ],
+        **({"symbols_truncated": omitted_symbols} if omitted_symbols else {}),
+        **({"errors": errors} if errors else {}),
+        **({"errors_truncated": error_count - len(errors)} if error_count > len(errors) else {}),
+    }
+
+
+def query_payload(record: dict[str, Any], locations: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = {
         "id": record["id"],
         "p": record["p"],
         "s": record["s"],
@@ -461,10 +629,13 @@ def query_payload(record: dict[str, Any]) -> dict[str, Any]:
         "fx": record["fx"],
         "verify": record["verify"],
     }
+    if locations is not None:
+        payload["loc"] = locations
+    return payload
 
 
-def query_memory(root: Path, query: str, limit: int) -> int:
-    init_memory(root, announce=False)
+def _query_memory(root: Path, query: str, limit: int, locate: bool = False) -> int:
+    _init_memory(root, announce=False)
     _, index, records = memory_paths(root)
     if not index.is_file():
         print("NO_INDEX")
@@ -472,7 +643,7 @@ def query_memory(root: Path, query: str, limit: int) -> int:
     rows, repair_index = read_index(index)
     if not rows:
         print("EMPTY_INDEX")
-        return rebuild_index(root) if repair_index else 0
+        return _rebuild_index(root) if repair_index else 0
 
     terms = {term.casefold() for term in TOKEN_PATTERN.findall(query) if len(term) > 1}
     ranked: list[tuple[int, dict[str, str]]] = []
@@ -484,11 +655,11 @@ def query_memory(root: Path, query: str, limit: int) -> int:
     ranked.sort(key=lambda item: (-item[0], item[1]["id"]))
     if not ranked:
         print("NO_MATCH")
-        return rebuild_index(root) if repair_index else 0
+        return _rebuild_index(root) if repair_index else 0
 
-    emitted = 0
+    valid_count = 0
     for score, row in ranked:
-        if emitted >= limit:
+        if valid_count >= limit:
             break
         path = records / f"{row['id']}.json"
         should_prune = False
@@ -497,9 +668,13 @@ def query_memory(root: Path, query: str, limit: int) -> int:
             if record["id"] != row["id"]:
                 raise MemoryError(f"index id does not match record id: {path}")
             valid, changed = freshness(root, record)
+            locations = locate_symbols(root, record) if valid and locate else None
+            if valid and locate:
+                valid, changed = freshness(root, record)
             if valid:
                 print(f"VALID {row['id']} score={score}")
-                print(json.dumps(query_payload(record), ensure_ascii=False, separators=(",", ":")))
+                print(json.dumps(query_payload(record, locations), ensure_ascii=False, separators=(",", ":")))
+                valid_count += 1
             else:
                 print(f"STALE {row['id']} {' '.join(changed)}")
                 should_prune = True
@@ -509,11 +684,15 @@ def query_memory(root: Path, query: str, limit: int) -> int:
         if should_prune:
             prune_record(records, path, row["id"])
             repair_index = True
-        emitted += 1
-    return rebuild_index(root) if repair_index else 0
+    return _rebuild_index(root) if repair_index else 0
 
 
-def audit_memory(root: Path) -> int:
+def query_memory(root: Path, query: str, limit: int, locate: bool = False) -> int:
+    with memory_lock(root):
+        return _query_memory(root, query, limit, locate)
+
+
+def _audit_memory(root: Path) -> int:
     _, _, records = memory_paths(root)
     if not records.is_dir():
         print("NO_MEMORY")
@@ -547,9 +726,24 @@ def audit_memory(root: Path) -> int:
             except MemoryError as exc:
                 errors += 1
                 print(f"ERROR {exc}")
-    rebuild_result = rebuild_index(root)
+    rebuild_result = _rebuild_index(root)
     print(f"AUDITED {total} invalid={invalid} pruned={pruned}")
     return 1 if errors or rebuild_result else 0
+
+
+def audit_memory(root: Path) -> int:
+    memory, _, _ = memory_paths(root)
+    if not memory.is_dir():
+        print("NO_MEMORY")
+        return 0
+    with memory_lock(root):
+        return _audit_memory(root)
+
+
+def reindex_memory(root: Path) -> int:
+    with memory_lock(root):
+        _init_memory(root)
+        return _rebuild_index(root)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -564,6 +758,11 @@ def build_parser() -> argparse.ArgumentParser:
     query = subparsers.add_parser("query")
     query.add_argument("--root", default=".")
     query.add_argument("--limit", type=int, default=3)
+    query.add_argument(
+        "--locate",
+        action="store_true",
+        help="resolve saved symbols to current path:line locations after fingerprint validation",
+    )
     query.add_argument("query")
     return parser
 
@@ -580,10 +779,9 @@ def main() -> int:
         if args.command == "query":
             if args.limit < 1:
                 raise MemoryError("limit must be at least 1")
-            return query_memory(root, args.query, args.limit)
+            return query_memory(root, args.query, args.limit, args.locate)
         if args.command == "reindex":
-            init_memory(root)
-            return rebuild_index(root)
+            return reindex_memory(root)
         if args.command == "audit":
             return audit_memory(root)
         raise MemoryError(f"unsupported command: {args.command}")

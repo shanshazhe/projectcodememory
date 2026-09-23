@@ -4,9 +4,13 @@ import contextlib
 import importlib.util
 import io
 import json
+import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "pcm.py"
@@ -459,6 +463,183 @@ class ProjectCodeMemoryCleanupTest(unittest.TestCase):
         self.assertIn("malformed index row", stderr)
         self.assertEqual("keep", sentinel.read_text(encoding="utf-8"))
         self.assertEqual(pcm.INDEX_HEADER, self.index_text())
+
+    def test_query_limit_counts_valid_records_after_pruning_stale_match(self) -> None:
+        stale_source = self.save("aaa-stale", "shared-query")
+        self.save("bbb-valid", "shared-query")
+        stale_source.write_text("VALUE = 'changed'\n", encoding="utf-8")
+
+        result, stdout, _ = self.capture(pcm.query_memory, self.root, "shared-query", 1)
+
+        self.assertEqual(0, result)
+        self.assertIn("STALE aaa-stale", stdout)
+        self.assertIn("VALID bbb-valid", stdout)
+        self.assertFalse(self.record("aaa-stale").exists())
+        self.assertTrue(self.record("bbb-valid").exists())
+
+    def test_query_locate_resolves_current_symbol_lines_after_validation(self) -> None:
+        source = self.root / "auth.py"
+        source.write_text(
+            "HEADER = True\n\nclass SessionStore:\n    pass\n",
+            encoding="utf-8",
+        )
+        draft = self.write_draft(
+            "auth-flow",
+            keywords=["authentication"],
+            paths=[source.name],
+            symbols=["SessionStore", "MissingSymbol"],
+            summary="Authentication session ownership",
+            facts=["SessionStore owns persisted sessions"],
+        )
+        self.capture(pcm.save_record, self.root, str(draft))
+
+        result, stdout, _ = self.capture(
+            pcm.query_memory, self.root, "authentication", 1, True
+        )
+
+        self.assertEqual(0, result)
+        payload = json.loads(next(line for line in stdout.splitlines() if line.startswith("{")))
+        locations = {item["symbol"]: item for item in payload["loc"]["symbols"]}
+        self.assertEqual(
+            [{"path": "auth.py", "line": 3}],
+            locations["SessionStore"]["matches"],
+        )
+        self.assertEqual([], locations["MissingSymbol"]["matches"])
+
+    def test_query_locate_bounds_total_symbol_output(self) -> None:
+        symbols = [f"Symbol{index}" for index in range(pcm.MAX_SYMBOLS_TO_LOCATE + 3)]
+        source = self.root / "many_symbols.py"
+        source.write_text("\n".join(symbols) + "\n", encoding="utf-8")
+        draft = self.write_draft(
+            "many-symbols",
+            keywords=["many"],
+            paths=[source.name],
+            symbols=symbols,
+            summary="Many symbol locations",
+            facts=["The source defines many symbols"],
+        )
+        self.capture(pcm.save_record, self.root, str(draft))
+
+        result, stdout, _ = self.capture(pcm.query_memory, self.root, "many", 1, True)
+
+        self.assertEqual(0, result)
+        payload = json.loads(next(line for line in stdout.splitlines() if line.startswith("{")))
+        self.assertEqual(pcm.MAX_SYMBOLS_TO_LOCATE, len(payload["loc"]["symbols"]))
+        self.assertEqual(3, payload["loc"]["symbols_truncated"])
+
+    def test_query_prunes_source_redirected_outside_repository(self) -> None:
+        source = self.save("redirected", "redirected-keyword")
+        outside = self.root.parent / "outside.py"
+        outside.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        source.unlink()
+        try:
+            source.symlink_to(outside)
+        except OSError as exc:
+            self.skipTest(f"symlinks are unavailable: {exc}")
+
+        result, stdout, _ = self.capture(
+            pcm.query_memory, self.root, "redirected-keyword", 1, True
+        )
+
+        self.assertEqual(0, result)
+        self.assertIn("redirected.py:unsafe", stdout)
+        self.assertFalse(self.record("redirected").exists())
+
+    def test_query_prunes_record_when_fingerprint_read_fails(self) -> None:
+        self.save("unreadable", "unreadable-keyword")
+
+        with mock.patch.object(pcm, "fingerprint", side_effect=OSError("read raced")):
+            result, stdout, _ = self.capture(
+                pcm.query_memory, self.root, "unreadable-keyword", 1
+            )
+
+        self.assertEqual(0, result)
+        self.assertIn("unreadable.py:unreadable", stdout)
+        self.assertFalse(self.record("unreadable").exists())
+
+    def test_memory_lock_times_out_when_another_holder_is_active(self) -> None:
+        with pcm.memory_lock(self.root):
+            with self.assertRaisesRegex(pcm.MemoryError, "timed out waiting for memory lock"):
+                with pcm.memory_lock(self.root, timeout=0.01):
+                    pass
+
+    def test_atomic_write_uses_unique_temporary_files_under_concurrency(self) -> None:
+        destination = self.root / "shared.txt"
+        barrier = threading.Barrier(2)
+        original_replace = pcm.os.replace
+        failures: list[Exception] = []
+
+        def synchronized_replace(source, target):
+            barrier.wait(timeout=2)
+            original_replace(source, target)
+
+        def writer(content: str) -> None:
+            try:
+                pcm.atomic_write(destination, content)
+            except Exception as exc:
+                failures.append(exc)
+
+        with mock.patch.object(pcm.os, "replace", side_effect=synchronized_replace):
+            threads = [
+                threading.Thread(target=writer, args=(content,))
+                for content in ("one", "two")
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=3)
+
+        self.assertFalse(failures)
+        self.assertIn(destination.read_text(encoding="utf-8"), {"one", "two"})
+        self.assertEqual([], list(self.root.glob(".shared.txt.*.tmp")))
+
+    def test_concurrent_cli_saves_preserve_every_record_and_index_row(self) -> None:
+        drafts: list[Path] = []
+        for index in range(4):
+            source = self.root / f"source-{index}.py"
+            source.write_text(f"VALUE = {index}\n", encoding="utf-8")
+            drafts.append(
+                self.write_draft(
+                    f"topic-{index}",
+                    keywords=[f"keyword-{index}"],
+                    paths=[source.name],
+                    summary=f"Independent topic {index}",
+                    facts=[f"Topic {index} uses value {index}"],
+                )
+            )
+
+        processes = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "save",
+                    "--root",
+                    str(self.root),
+                    str(draft),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for draft in drafts
+        ]
+        results = [process.communicate(timeout=10) for process in processes]
+
+        for process, (stdout, stderr) in zip(processes, results):
+            self.assertEqual(0, process.returncode, f"stdout={stdout}\nstderr={stderr}")
+        self.assertEqual(
+            {f"topic-{index}" for index in range(4)},
+            {path.stem for path in (self.root / pcm.MEMORY_DIR / "records").glob("*.json")},
+        )
+        self.assertEqual(4, len(self.index_rows()))
+
+    def test_audit_without_memory_does_not_create_cache(self) -> None:
+        result, stdout, _ = self.capture(pcm.audit_memory, self.root)
+
+        self.assertEqual(0, result)
+        self.assertEqual("NO_MEMORY\n", stdout)
+        self.assertFalse((self.root / pcm.MEMORY_DIR).exists())
 
     def test_audit_prunes_all_invalid_records_and_rebuilds_index(self) -> None:
         self.save("valid", "valid-keyword")

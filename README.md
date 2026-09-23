@@ -9,7 +9,9 @@ The cache is local to the target repository, machine-oriented, and never a repla
 - Reuses verified architecture, control-flow, invariant, and side-effect notes.
 - Validates every record against fingerprints of its supporting source files.
 - Uses the smallest sufficient evidence set to avoid invalidating unrelated knowledge.
-- Prunes stale or malformed records safely and repairs the searchable index.
+- Prunes stale or malformed records safely and repairs the searchable index without letting invalid candidates consume the valid-result limit.
+- Resolves saved symbols to current `path:line` locations on demand after fingerprint validation.
+- Serializes concurrent CLI operations and atomically replaces cache files.
 - Avoids duplicate records by merging highly similar, structurally anchored topics at save time.
 - Keeps all generated state under an ignored `projectCodeMemory/` directory.
 - Activates only for broad, cross-file, unfamiliar, or recurring code work; narrow tasks skip its fixed overhead.
@@ -38,8 +40,8 @@ Codex can also select the skill automatically when a task matches its descriptio
 1. Skip the workflow for narrow work already pinned to one or two exact files or symbols.
 2. Pin one primary project root. On first use, count repository-owned source and test paths without reading contents and stop as soon as the count reaches 11; an existing cache skips this count.
 3. With no existing cache, bypass first-time memory setup when the count is 10 or fewer.
-4. For eligible projects, query memory before reading or broadly searching source content, using `--limit 1` for focused work and up to three only for genuinely cross-cutting work.
-5. Reuse complete fingerprint-valid hits and inspect only missing, stale, or exact edit details.
+4. For eligible projects, query memory before reading or broadly searching source content, using `--limit 1` for focused work and up to three only for genuinely cross-cutting work. Add `--locate` when a code change or review benefits from current line locations for saved symbols.
+5. Reuse complete fingerprint-valid hits and inspect only missing, stale, or exact edit details. Stale higher-ranked candidates are pruned while the query continues looking for the requested number of valid records.
 6. Save only newly verified, stable, reusable knowledge that passes the save gate; load the record-authoring reference only when a save is warranted.
 7. Let normal queries validate and prune matched records; reserve full-cache audits for deliberate maintenance.
 
@@ -70,6 +72,7 @@ Run the CLI from this repository and pass the target project with `--root`:
 python3 scripts/pcm.py init --root /path/to/project
 python3 scripts/pcm.py query --root /path/to/project "symbol path or task terms"
 python3 scripts/pcm.py query --root /path/to/project --limit 5 "task terms"
+python3 scripts/pcm.py query --root /path/to/project --limit 1 --locate "symbol to edit"
 python3 scripts/pcm.py save --root /path/to/project /path/to/project/projectCodeMemory/drafts/topic.json
 python3 scripts/pcm.py reindex --root /path/to/project
 python3 scripts/pcm.py audit --root /path/to/project
@@ -78,7 +81,7 @@ python3 scripts/pcm.py audit --root /path/to/project
 | Command | Behavior |
 | --- | --- |
 | `init` | Creates the cache directories and index, then ensures the ignore rule exists. |
-| `query` | Initializes if needed, ranks index matches, validates up to `--limit` records, and emits valid knowledge. Matching stale or invalid records are pruned and the index is repaired. The default limit is 3. |
+| `query` | Initializes if needed, ranks index matches, and emits up to `--limit` fingerprint-valid records. Matching stale or invalid records are pruned without consuming that limit. `--locate` adds bounded current line matches for saved symbols after a second freshness check. The default limit is 3. |
 | `save` | Validates and fingerprints a draft. The same ID replaces its record; a different, highly similar topic is left `UNCHANGED` or `MERGED` into the existing ID and summary. Otherwise a new record is saved. The index is rebuilt and the draft is removed after success. |
 | `reindex` | Rebuilds the index from readable, structurally valid records. It does not check source fingerprints or perform a full cleanup. |
 | `audit` | Validates every record, prunes all stale or invalid records, and rebuilds the index. |
@@ -109,6 +112,8 @@ Drafts must live inside `<root>/projectCodeMemory/drafts/` and use repository-re
 Required, non-empty fields are `id`, `keywords`, `paths`, `summary`, `facts`, and `verification`. The `id` must match `[a-z0-9][a-z0-9._-]{0,79}`. Every path must resolve to an existing file inside the target project and must not point into `projectCodeMemory/`.
 
 `paths` is an invalidation dependency list, not a research log. Include a file only when its current contents directly support a stored fact, flow, invariant, or side effect. Browsed files, incidental callers, shared wrappers, build files, and tests used only for verification should stay out of `paths`; keep commands and results in `verification`. Do not omit genuinely necessary cross-file evidence. Split independent topics into separate records when that keeps their evidence and change cadence separate.
+
+Use exact source identifiers in `symbols` when possible. `query --locate` searches those literals only inside fingerprint-valid evidence paths and returns at most five current line matches for each of the first 50 symbols. It reports omitted-symbol counts rather than allowing location output to grow without bound, and it does not persist line numbers in the record.
 
 The CLI stores normalized records rather than generating analysis itself. Codex is responsible for inspecting the code, verifying conclusions, and preparing the draft.
 
