@@ -1,27 +1,28 @@
 ---
 name: project-code-memory
-description: Reuses SHA-256-verified knowledge to avoid repeated source scans in large codebases. Use before broad or cross-file repository analysis, unfamiliar debugging or implementation, architecture and invariant tracing, or recurring domain questions where prior analysis may exist. Do not use for non-code tasks or narrowly scoped work already pinned to one or two exact files or symbols, such as typos, mechanical edits, and direct lookups; avoid first-time setup in projects with 10 or fewer owned source/test files.
+description: Reuses SHA-256-verified knowledge before direct repository discovery. Use before any source/test search, read, or modification for a code task, including localized lookups, so existing memory is always queried first. Skip non-code tasks and tasks requiring no repository code discovery; avoid first-time setup only in projects with 10 or fewer owned source/test files.
 ---
 
 # Project Code Memory
 
 Use `projectCodeMemory/` as a compact, ignored cache of verified code knowledge. Optimize total investigation cost, not the number of records. Current source is authoritative; a fingerprint-valid record is a trusted proxy only for the files and facts it covers.
 
-## 1. Eligibility gate
+## 1. Memory-first eligibility gate
 
 Pin `PRIMARY_PROJECT_ROOT` once to the repository that owns the code the user asked about. Default to the nearest repository containing the task's initial working directory; change roots only when the user explicitly switches the target project.
 
-Use this workflow only when the task benefits from broad, cross-file, unfamiliar, or repeated code reasoning. Skip it for localized work that can be completed with at most one or two known source reads.
+For every code task that will search, read, or modify repository-owned source or tests, use this workflow before direct repository discovery. This includes localized lookups, known-file edits, mechanical changes, broad analysis, debugging, and implementation. Skip it only for non-code tasks or tasks that require no repository code discovery.
 
-Before the first source-content read:
+Before the first source-symbol/path search or source-content read:
 
-1. If `<root>/projectCodeMemory/` already exists, skip counting and continue to **Query first**.
+1. If `<root>/projectCodeMemory/` already exists, skip counting and continue to **Query first**, regardless of task scope.
 2. Otherwise, count repository-owned source and test file paths without reading their contents. Include tracked and non-ignored untracked files; exclude vendored dependencies, generated files, build outputs, and caches. Stop once the count reaches 11.
 3. If the count is 10 or fewer, bypass this skill for the rest of the task. Do not initialize memory or modify `.gitignore`.
+4. If the count reaches 11, continue to **Query first**; the query will initialize memory when absent.
 
 ## 2. Query first
 
-For an eligible project, make the memory query the first content-discovery operation. Build a focused query from the user's domain terms plus any known paths, classes, methods, event names, or error codes; avoid generic filler words.
+For an eligible project, make the memory query the first repository code-discovery operation. Run it before `rg`, `grep`, `find`, or other source/path discovery (except the eligibility file count above), and before reading source files. Build a focused query from the user's domain terms plus any known paths, classes, methods, event names, or error codes; avoid generic filler words.
 
 ```bash
 python3 <skill-dir>/scripts/pcm.py query \
