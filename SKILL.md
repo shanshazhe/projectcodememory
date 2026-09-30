@@ -1,6 +1,6 @@
 ---
 name: project-code-memory
-description: Reuses SHA-256-verified knowledge before direct repository discovery. Use before any source/test search, read, or modification for a code task, including localized lookups, so existing memory is always queried first. Skip non-code tasks and tasks requiring no repository code discovery; avoid first-time setup only in projects with 10 or fewer owned source/test files.
+description: Reuses SHA-256-verified knowledge before repository code discovery and reconciles affected memory JSON after every eligible code change. Use before any source/test search, read, or modification, including localized tasks; check and refresh affected records before finishing edits. Skip non-code tasks or tasks needing no repository code discovery; avoid first-time setup only in projects with 10 or fewer owned source/test files.
 ---
 
 # Project Code Memory
@@ -48,9 +48,18 @@ Query again only when discovery exposes a genuinely new symbol or subsystem that
 - Never infer that an omitted fact is false.
 - Keep one fixed primary root. Code outside it is a secondary, read-only reference: never initialize memory there or store external-only behavior in the primary cache.
 
-## 4. Save only high-value knowledge
+## 4. Reconcile memory after every eligible code change
 
-Save a record only when all are true:
+This is a required closeout step, even when the initial query returned `NO_MATCH` or the change seems small. After inspecting the final diff and running relevant checks:
+
+1. Compare changed repository source/test paths with the `paths` column (third, tab-separated field) of `<root>/projectCodeMemory/index.tsv`. Do not assume the initial query found every affected record; an indexed record can refer to a changed file without matching the task's keywords. This is a targeted path check, not a full audit. Read matching `<root>/projectCodeMemory/records/<id>.json` only to identify prior claims and IDs; after an evidence-file change, recheck every retained claim against current source rather than trusting old fingerprints.
+2. For each affected record whose knowledge remains useful, prepare a draft with its **existing ID** using current evidence and checks, then run `save` to refresh its fingerprints. Update or remove facts, evidence paths, and verification that no longer hold. Do this even if the code change was only formatting: a changed evidence file invalidates its fingerprint. Do not edit compact records or `index.tsv` by hand. If a record is no longer true or useful, use a targeted query for its ID to prune the stale record and confirm `PRUNED`; do not recreate it merely to keep the count up.
+3. Evaluate whether the task established new reusable knowledge using the save gate below. Create a new record only if it passes. Trivial edits can correctly produce **no new JSON**, but they cannot skip checking and reconciling existing affected records.
+4. Before replying, confirm any drafts were saved or explicitly report why saving was blocked. State the memory outcome (`saved`, `refreshed`, `pruned`, or `no write` with reason) alongside code verification; do not silently omit this check. If the cache/index is unreadable or reconciliation fails, report the unresolved issue rather than claiming memory is current.
+
+## 5. Save only high-value knowledge
+
+Save a new record only when all are true:
 
 1. The task established new or changed knowledge through current-source inspection or a verified code change.
 2. The knowledge is stable and likely to help a future task.
@@ -59,15 +68,9 @@ Save a record only when all are true:
 
 Do **not** save line numbers, code dumps, localized implementation trivia, transient failures, guesses, secrets, routine DTO plumbing, mechanical edits, or facts already covered by an unchanged complete hit.
 
-When the save gate passes, read [references/record-format.md](references/record-format.md) completely, create the draft there described, and run `save`. Otherwise finish without a memory write. If future value is uncertain, do not save.
+When the gate passes for a new record, or an affected existing record needs a refresh, read [references/record-format.md](references/record-format.md) completely, create a draft, and run `save`. Otherwise finish without creating a new record. Do not run a full audit after an ordinary change or single save.
 
-For code changes:
-
-- Update a loaded record when the change alters its reusable knowledge.
-- If an evidence path changed but the facts did not, refresh the record only when it was task-relevant and revalidation is cheap; otherwise let a future query prune it.
-- Do not run a full audit after an ordinary change or single save.
-
-## 5. Integrity and maintenance
+## 6. Integrity and maintenance
 
 - A fingerprint mismatch always overrides remembered conclusions.
 - Never edit stored fingerprints, compact records, or `index.tsv` by hand; use the CLI. CLI operations serialize through a repository-local lock and use atomic replacement, so concurrent agents should invoke the CLI rather than manipulating cache files directly.

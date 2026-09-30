@@ -14,7 +14,7 @@ The cache is local to the target repository, machine-oriented, and never a repla
 - Serializes concurrent CLI operations and atomically replaces cache files.
 - Avoids duplicate records by merging highly similar, structurally anchored topics at save time.
 - Keeps all generated state under an ignored `projectCodeMemory/` directory.
-- Activates only for broad, cross-file, unfamiliar, or recurring code work; narrow tasks skip its fixed overhead.
+- Queries before repository source/test discovery even for narrow code work; reconciles affected JSON records after each eligible code change.
 - Avoids first-time memory setup for projects with 10 or fewer owned source and test files.
 - Keeps low-frequency record-authoring details in an on-demand reference instead of every skill load.
 - Uses only the Python standard library.
@@ -37,13 +37,14 @@ Codex can also select the skill automatically when a task matches its descriptio
 
 ## How the workflow behaves
 
-1. Skip the workflow for narrow work already pinned to one or two exact files or symbols.
+1. Use the workflow for code tasks requiring repository source/test discovery, including narrow, known-file work. Skip only non-code tasks or tasks needing no repository code discovery.
 2. Pin one primary project root. On first use, count repository-owned source and test paths without reading contents and stop as soon as the count reaches 11; an existing cache skips this count.
 3. With no existing cache, bypass first-time memory setup when the count is 10 or fewer.
 4. For eligible projects, query memory before reading or broadly searching source content, using `--limit 1` for focused work and up to three only for genuinely cross-cutting work. Add `--locate` when a code change or review benefits from current line locations for saved symbols.
 5. Reuse complete fingerprint-valid hits and inspect only missing, stale, or exact edit details. Stale higher-ranked candidates are pruned while the query continues looking for the requested number of valid records.
-6. Save only newly verified, stable, reusable knowledge that passes the save gate; load the record-authoring reference only when a save is warranted.
-7. Let normal queries validate and prune matched records; reserve full-cache audits for deliberate maintenance.
+6. After every eligible code change, compare changed source/test paths with the evidence paths in `index.tsv`; refresh affected records under their existing IDs from current source or prune stale ones. Do not rely on the initial query to find every affected record.
+7. Save new records only for verified, stable, reusable knowledge that passes the save gate. A small change may require no new JSON, but never skip checking existing affected records. Report the memory outcome or why a write was unnecessary/blocked.
+8. Let normal queries validate and prune matched records; reserve full-cache audits for deliberate maintenance.
 
 Directories outside the primary project are treated as read-only references. The skill never creates a second memory cache for them.
 
@@ -115,7 +116,7 @@ Required, non-empty fields are `id`, `keywords`, `paths`, `summary`, `facts`, an
 
 Use exact source identifiers in `symbols` when possible. `query --locate` searches those literals only inside fingerprint-valid evidence paths and returns at most five current line matches for each of the first 50 symbols. It reports omitted-symbol counts rather than allowing location output to grow without bound, and it does not persist line numbers in the record.
 
-The CLI stores normalized records rather than generating analysis itself. Codex is responsible for inspecting the code, verifying conclusions, and preparing the draft.
+The CLI stores normalized records rather than generating analysis itself. The agent is responsible for inspecting the code, verifying conclusions, and preparing drafts. After edits, use the same ID to refresh affected records with updated evidence and verification; never manually patch compact JSON or fingerprints.
 
 ## Development
 

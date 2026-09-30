@@ -46,6 +46,10 @@ Do not omit a genuine cross-file dependency merely to reduce invalidation. Split
 
 Every evidence path must be repository-relative, exist inside the primary root, and stay outside `projectCodeMemory/`. Never store knowledge supported only by external repositories.
 
+## Refresh an affected record
+
+After a code change, identify records whose indexed evidence paths overlap changed source/test files. For each record worth keeping, use its **existing `id`** in a new draft; rewrite the fields from current source rather than copying unsupported old claims. Recheck every retained claim and path even if only formatting changed, because the SHA-256 fingerprint must be updated. Record checks actually run in `verification`. If the record no longer describes current code, query its ID to prune the stale record rather than saving stale knowledge. Never hand-edit the compact JSON or its fingerprints.
+
 ## Save
 
 ```bash
@@ -66,4 +70,5 @@ Before finishing, confirm that:
 - every claim has direct evidence in `paths`;
 - no secret, guess, code dump, or stale conclusion is present;
 - verification wording matches what actually ran;
+- affected existing records have been refreshed or pruned (or a blocking error is reported);
 - the cache remains ignored and uncommitted.
