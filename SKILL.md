@@ -46,6 +46,7 @@ Query again only when discovery exposes a genuinely new symbol or subsystem that
 - Treat a record as authority only for its stated facts, flows, invariants, side effects, and fingerprinted paths.
 - Read current source for uncovered details, exact edit context, or behavior not stated in the record.
 - Never infer that an omitted fact is false.
+- Returned `refs` are historical lookup pointers, not fingerprint-verified evidence. Read an archive only when its original content is needed, using normal tool permissions. Prefer its exact `path` across sessions; use `obs_recall` with an ID only when the owning session is known to be the active session. A missing archive does not invalidate the source knowledge; inspect current evidence if needed.
 - Keep one fixed primary root. Code outside it is a secondary, read-only reference: never initialize memory there or store external-only behavior in the primary cache.
 
 ## 4. Reconcile memory after every eligible code change
@@ -68,7 +69,7 @@ Save a new record only when all are true:
 
 Do **not** save line numbers, code dumps, localized implementation trivia, transient failures, guesses, secrets, routine DTO plumbing, mechanical edits, or facts already covered by an unchanged complete hit.
 
-When the gate passes for a new record, or an affected existing record needs a refresh, read [references/record-format.md](references/record-format.md) completely, create a draft, and run `save`. Otherwise finish without creating a new record. Do not run a full audit after an ordinary change or single save.
+When the gate passes for a new record, or an affected existing record needs a refresh, read [references/record-format.md](references/record-format.md) completely, create a draft, and run `save`. Include any known, task-relevant archive references in that draft; never invent IDs, paths, or session identity. References alone do not bypass the save gate or trigger an extra query/save. Otherwise finish without creating a new record. Do not run a full audit after an ordinary change or single save.
 
 ## 6. Integrity and maintenance
 

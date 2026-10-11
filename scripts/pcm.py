@@ -188,6 +188,40 @@ def string_list(value: Any, field: str, required: bool = False) -> list[str]:
     return result
 
 
+def reference_list(value: Any) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise MemoryError("references must be an array of objects")
+    fields = ("kind", "id", "path", "session", "label")
+    references: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) - set(fields):
+            raise MemoryError("reference fields must be kind, id, path, session, or label")
+        reference: dict[str, str] = {}
+        for field in fields:
+            if field in item:
+                text = item[field]
+                if not isinstance(text, str) or not text.strip() or "\0" in text:
+                    raise MemoryError(f"reference {field} must be a non-empty string without NUL")
+                # Preserve exact locators, including whitespace in filesystem paths.
+                reference[field] = text
+        if "kind" not in reference or not ("id" in reference or "path" in reference):
+            raise MemoryError("reference requires kind and at least one of id or path")
+        key = json.dumps(reference, sort_keys=True, ensure_ascii=False)
+        if key not in seen:
+            seen.add(key)
+            references.append(reference)
+    return references
+
+
+def preserve_references(target: dict[str, Any], *records: dict[str, Any]) -> None:
+    references = reference_list([ref for record in records for ref in record.get("refs", [])])
+    if references:
+        target["refs"] = references
+
+
 def source_path(root: Path, value: str) -> tuple[str, Path]:
     candidate = (root / value).resolve()
     try:
@@ -236,7 +270,7 @@ def normalize_draft(root: Path, draft: dict[str, Any]) -> dict[str, Any]:
             paths.append(relative)
             fingerprints[relative] = fingerprint(absolute)
 
-    return {
+    record = {
         "v": 1,
         "id": identifier,
         "k": string_list(draft.get("keywords"), "keywords", required=True),
@@ -250,6 +284,10 @@ def normalize_draft(root: Path, draft: dict[str, Any]) -> dict[str, Any]:
         "verify": string_list(draft.get("verification"), "verification", required=True),
         "fp": fingerprints,
     }
+    references = reference_list(draft.get("references"))
+    if references:
+        record["refs"] = references
+    return record
 
 
 def load_record(path: Path) -> dict[str, Any]:
@@ -288,6 +326,8 @@ def load_record(path: Path) -> dict[str, Any]:
         or any(not isinstance(key, str) or not isinstance(value, str) for key, value in fingerprints.items())
     ):
         raise MemoryError(f"record {path} has invalid fingerprints")
+    if "refs" in record:
+        record["refs"] = reference_list(record["refs"])
     return record
 
 
@@ -369,6 +409,7 @@ def merge_record(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str
         path: incoming["fp"].get(path, existing["fp"].get(path))
         for path in merged["p"]
     }
+    preserve_references(merged, existing, incoming)
     return merged
 
 
@@ -471,6 +512,13 @@ def _save_record(root: Path, draft_path: str) -> int:
     _, _, records = memory_paths(root)
     destination = records / f"{record['id']}.json"
     replace_same_id = destination.exists()
+    if replace_same_id:
+        try:
+            previous = load_record(destination)
+        except MemoryError:
+            previous = None  # Existing malformed records can still be replaced.
+        if previous is not None and previous["id"] == record["id"]:
+            preserve_references(record, previous, record)
     existing, similarity = find_similar_record(root, records, record)
     if replace_same_id:
         existing = None
@@ -484,7 +532,14 @@ def _save_record(root: Path, draft_path: str) -> int:
         atomic_write(destination, json.dumps(merged, ensure_ascii=False, separators=(",", ":")) + "\n")
         print(f"MERGED {record['id']} into={existing['id']} similarity={similarity:.2f}")
     else:
-        print(f"UNCHANGED {record['id']} duplicate-of={existing['id']} similarity={similarity:.2f}")
+        referenced = dict(existing)
+        preserve_references(referenced, existing, record)
+        if referenced.get("refs") != existing.get("refs"):
+            destination = records / f"{existing['id']}.json"
+            atomic_write(destination, json.dumps(referenced, ensure_ascii=False, separators=(",", ":")) + "\n")
+            print(f"REFERENCED {record['id']} into={existing['id']} similarity={similarity:.2f}")
+        else:
+            print(f"UNCHANGED {record['id']} duplicate-of={existing['id']} similarity={similarity:.2f}")
     result = _rebuild_index(root)
     if result == 0:
         draft_file.unlink()
@@ -629,6 +684,8 @@ def query_payload(record: dict[str, Any], locations: dict[str, Any] | None = Non
         "fx": record["fx"],
         "verify": record["verify"],
     }
+    if record.get("refs"):
+        payload["refs"] = record["refs"]
     if locations is not None:
         payload["loc"] = locations
     return payload

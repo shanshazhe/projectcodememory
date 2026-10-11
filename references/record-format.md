@@ -36,6 +36,28 @@ Required, non-empty fields are `id`, `keywords`, `paths`, `summary`, `facts`, an
 - **side_effects:** Persistence, event, network, authorization, or lifecycle effects.
 - **verification:** Exact source inspection and checks actually performed. Never imply that tests ran when they did not.
 
+## Optional archive references
+
+When a save is already required by the normal workflow, include known, relevant references in an optional `references` array:
+
+```json
+"references": [
+  {
+    "kind": "sol-pi-observation",
+    "id": "obs_original_id",
+    "path": "/absolute/path/to/original/archive.txt",
+    "session": "original-session-id",
+    "label": "Original source inspection output"
+  }
+]
+```
+
+Each object requires a non-empty `kind` and at least one of `id` or `path`. Optional fields are `session` and `label`; no other fields are accepted. Use kinds such as `sol-pi-observation`, `gateway-archive`, or `file`. Supply only actual locators already known from the task: never fabricate an archive path from an ID. Preserve filesystem paths exactly, including spaces. Store only locator metadata, not original content, commands, credentials, or secrets.
+
+The compact record and normal query output expose this array as `refs`. References do not enter source `paths`/`fp`, the index, topic similarity, or knowledge-continuity checks. The CLI does not open or fingerprint referenced files; missing or changed archives do not stale otherwise valid source knowledge. These are historical pointers, not proof that archived content still matches current source. An ID alone may be insufficient across sessions: use an exact path with the normal read tool when available, and use `obs_recall` only in the known owning session. Without a usable locator, inspect current source instead of guessing.
+
+Same-ID refreshes and topic merges retain existing references and append new ones, deduplicating identical objects. Omitting `references` or passing an empty list preserves earlier references. A duplicate topic carrying only new references returns `REFERENCED` and keeps the canonical knowledge, fingerprints, and index unchanged. No new record, hook, compaction trigger, or extra save is required just because a reference exists. References disappear with a pruned record; this is not a standalone archive inventory, and it does not restore all references automatically after compaction.
+
 ## Evidence-path rules
 
 `paths` is an invalidation dependency list, not a browsing log.

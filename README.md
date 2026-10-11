@@ -17,6 +17,7 @@ The cache is local to the target repository, machine-oriented, and never a repla
 - Queries before repository source/test discovery even for narrow code work; reconciles affected JSON records after each eligible code change.
 - Avoids first-time memory setup for projects with 10 or fewer owned source and test files.
 - Keeps low-frequency record-authoring details in an on-demand reference instead of every skill load.
+- Returns optional archive references through the existing save/query workflow without adding archive files to source fingerprints.
 - Uses only the Python standard library.
 
 ## Install as a Codex skill
@@ -89,7 +90,7 @@ python3 scripts/pcm.py audit --root /path/to/project
 
 `query` is intentionally not read-only: it can create `projectCodeMemory/`, update `.gitignore`, prune matched records, and repair the index. It only validates records selected by the query and `--limit`; use `audit` for a deliberate full-cache health check after broad changes or when corruption is suspected. Unmatched stale records may remain until a later query or audit, but they are never returned as `VALID` without fingerprint validation.
 
-Common status lines include `SAVED`, `MERGED`, `UNCHANGED`, `VALID`, `STALE`, `ERROR`, `PRUNED`, `EMPTY_INDEX`, `NO_MATCH`, and `NO_MEMORY`.
+Common status lines include `SAVED`, `MERGED`, `REFERENCED`, `UNCHANGED`, `VALID`, `STALE`, `ERROR`, `PRUNED`, `EMPTY_INDEX`, `NO_MATCH`, and `NO_MEMORY`.
 
 ## Draft format
 
@@ -117,6 +118,30 @@ Required, non-empty fields are `id`, `keywords`, `paths`, `summary`, `facts`, an
 Use exact source identifiers in `symbols` when possible. `query --locate` searches those literals only inside fingerprint-valid evidence paths and returns at most five current line matches for each of the first 50 symbols. It reports omitted-symbol counts rather than allowing location output to grow without bound, and it does not persist line numbers in the record.
 
 The CLI stores normalized records rather than generating analysis itself. The agent is responsible for inspecting the code, verifying conclusions, and preparing drafts. After edits, use the same ID to refresh affected records with updated evidence and verification; never manually patch compact JSON or fingerprints.
+
+## Optional archive references
+
+When the existing workflow already calls for a save, an agent should include any known, relevant archive locators in the draft:
+
+```json
+"references": [
+  {
+    "kind": "sol-pi-observation",
+    "id": "obs_original_id",
+    "path": "/absolute/path/to/original/archive.txt",
+    "session": "original-session-id",
+    "label": "Original inspection output"
+  }
+]
+```
+
+`kind` and at least one of `id` or `path` are required; `session` and `label` are optional. Only those five fields are accepted. Keep exact paths and supply only locators actually known; do not guess paths or copy archive content or secrets. Gateway archives can use `kind: "gateway-archive"` with their native `Read` path.
+
+Records and normal queries return these as `refs`. They are historical lookup metadata, not verified source evidence: references never enter `paths`/`fp`, search ranking, or topic similarity, and the CLI never reads or hashes their targets. Archive deletion or changes therefore do not invalidate source knowledge. Across sessions, prefer an actual archive path; `obs_recall` IDs alone may not resolve outside their owning session.
+
+Same-ID refreshes and topic merges retain earlier references and append new ones; identical objects are deduplicated. Omitting the field or providing an empty array does not erase earlier references. A duplicate with only new references reports `REFERENCED` while preserving canonical knowledge, source fingerprints, and index content. Old records remain compatible. References are returned only with a valid matching record and disappear when that record is pruned; this is not an independent archive index or automatic post-compaction injection.
+
+Query/save timing and the save gate stay unchanged: references alone do not trigger a new save, hook, scan, or compaction action. Full field guidance is in [`references/record-format.md`](references/record-format.md).
 
 ## Development
 
